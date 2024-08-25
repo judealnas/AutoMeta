@@ -21,5 +21,3 @@ class BaseConfig(abc.ABC):
     def filepath(self) -> pathlib.Path:
         """Path to configuration file."""
         return self.__filepath
-    
-    
