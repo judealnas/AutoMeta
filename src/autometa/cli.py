@@ -63,8 +63,3 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Process file extensions
-    file_extensions = {ext.strip().lower() for ext in args.extensions.split(",")}
-    log_file_path = os.path.join(args.path, ".autometa", "logs")
-
-    start_monitoring(args.path, file_extensions, log_file_path)
