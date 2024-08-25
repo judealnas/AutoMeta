@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autometa"
+version = "0.1.0"
+authors = [
+    { name = "Jude Alnas" }
+]
+license = { file = "LICENSE" }
+
+[project.scripts]
+autometa = "autometa.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
