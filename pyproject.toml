@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,11 +10,6 @@ authors = [
 ]
 license = { file = "LICENSE" }
 
-[project.scripts]
-autometa = "autometa.__main__:main"
-
-[tool.setuptools.packages.find]
-where = ["."]
-
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+log_cli = true
