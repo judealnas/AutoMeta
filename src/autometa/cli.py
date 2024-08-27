@@ -1,6 +1,7 @@
 import argparse
 import pathlib
 
+from autometa.tags import Tags
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -16,10 +17,10 @@ if __name__ == "__main__":
         type=pathlib.Path,
         help="Specify metadata from file.",
     )
-    
+
     # Tag options
     parser.add_argument(
-        "--artist",
+        f"--{Tags.ARTIST.lower()}",
         type=str,
         help="Comma-separated sequence of artist names.",
     )
@@ -31,35 +32,34 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--album",
+        f"--{Tags.ALBUM.lower()}",
         type=str,
         help="Album name.",
     )
     parser.add_argument(
-        "--title",
+        f"--{Tags.TITLE.lower()}",
         type=str,
         help="Title of the track.",
     )
     parser.add_argument(
-        "--track",
+        f"--{Tags.TRACK.lower()}",
         type=int,
         help="Track number.",
     )
     parser.add_argument(
-        "--year",
+        f"--{Tags.YEAR.lower()}",
         type=int,
         help="Year of release.",
     )
     parser.add_argument(
-        "--genre",
+        f"--{Tags.GENRE.lower()}",
         type=str,
         help="Genre of the track.",
     )
     parser.add_argument(
-        "--comment",
+        f"--{Tags.COMMENT.lower()}",
         type=str,
         help="Comment.",
     )
 
     args = parser.parse_args()
-

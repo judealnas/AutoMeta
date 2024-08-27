@@ -1,4 +1,5 @@
 """Supported tags. Actual enum values do not comply with any specific standard."""
+
 import enum
 
 
@@ -9,5 +10,6 @@ class Tags(enum.StrEnum):
     ARTIST = "artist"
     AUTHOR = "author"
     GENRE = "genre"
-    COMMENTS = "comments"
+    COMMENT = "comment"
     YEAR = "year"
+    TRACK = "track"
