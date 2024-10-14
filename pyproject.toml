@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,6 +9,11 @@ authors = [
     { name = "Jude Alnas" }
 ]
 license = { file = "LICENSE" }
+
+[tool.setuptools]
+packages = ["autometa"]
+package-dir = {"" = "src"}
+
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
