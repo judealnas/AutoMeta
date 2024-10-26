@@ -2,7 +2,6 @@ import os
 import tempfile
 import unittest
 import logging
-import shutil
 import pathlib
 
 from autometa.util.tempcpy import TemporaryCopy

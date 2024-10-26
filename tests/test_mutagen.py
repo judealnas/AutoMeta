@@ -1,6 +1,4 @@
 import unittest
-import mutagen
-import tempfile
 
 class MutagenTestCase(unittest.TestCase):
     def test_mutagen(self):
