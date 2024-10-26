@@ -1,15 +1,17 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
+[tool.poetry]
 name = "autometa"
 version = "0.1.0"
-authors = [
-    { name = "Jude Alnas" }
-]
-license = { file = "LICENSE" }
+description = "Tool for updating metadata for audio files."
+authors = ["Jude Alnas"]
+readme = "README.md"
 
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-log_cli = true
+[tool.poetry.dependencies]
+python = ">=3.11"
+mutagen = "^1.47.0"
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.5"
