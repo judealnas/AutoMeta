@@ -46,7 +46,7 @@ Tags in the command-line take precedence over those in files.
 Hence, the artist data will be set to "Bar" in the following example:
 
 ```bash
-autometa my_music.mp3 --metadata="meta.yml" --artis=Bar
+autometa my_music.mp3 --metadata="meta.yml" --artist=Bar
 ```
 
 **Subject to change**
