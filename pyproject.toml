@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Tool for updating metadata for audio files."
 authors = ["Jude Alnas"]
 readme = "README.md"
+packages = [{ include = "autometa", from = "src" }]
 
 [tool.poetry.dependencies]
 python = ">=3.11"
@@ -15,3 +16,7 @@ mutagen = "^1.47.0"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
+pytest = ">=7"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
