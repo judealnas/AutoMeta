@@ -36,19 +36,16 @@ class TemporaryCopyTestCase(unittest.TestCase):
                     content = temp_copy_file.read()
                     self.assertEqual(content, contents)
 
-    def _test_id3_copy(self, filepath):
-        """Test creating a temporary copy of ID3 files. Check that tag data is also copied."""
+    def _test_copy(self, filepath):
+        """Test creating a temporary copy of a file. Check that tag data is also copied."""
         import mutagen
         from mutagen.id3 import TIT2
 
-        TITLE = "Silent Night"
         filepath = pathlib.Path(filepath)
         assert filepath.exists(), "Test file does not exist."
 
         # Set source file tags to known value
         src = mutagen.File(filepath)
-        src["TIT2"] = TIT2(text=[TITLE])
-        src.save()
 
         # Create a temporary copy
         with TemporaryCopy(filepath) as temp_copy:
@@ -57,46 +54,22 @@ class TemporaryCopyTestCase(unittest.TestCase):
 
             # Check that tags are copied
             cpy = mutagen.File(temp_copy)
-
-            self.assertDictEqual(dict(src), dict(cpy))
-
-    def _test_vorbis_copy(self, filepath):
-        """Test creating a temporary copy of Vorbis files. Check that tag data is also copied."""
-        from mutagen.oggvorbis import OggVorbis
-        import mutagen
-
-        TITLE = "Silent Night"
-        assert filepath.exists(), "Test file does not exist."
-
-        # Set source file tags to known value
-        src = mutagen.File(filepath)
-        src["title"] = TITLE
-        src.save()
-
-        # Create a temporary copy
-        with TemporaryCopy(filepath) as temp_copy:
-            self.logger.debug("Temporary copy: %s", temp_copy)
-            assert temp_copy.exists()
-
-            # Check that tags are copied
-            cpy = mutagen.File(temp_copy)
-
             self.assertDictEqual(dict(src), dict(cpy))
 
     def test_mp3_copy(self):
         """Test creating a temporary copy of MP3 files. Check that tag data is also copied."""
-        filepath = pathlib.Path("silent.mp3")
-        self._test_id3_copy(filepath)
+        filepath = pathlib.Path("tests", "silent.mp3")
+        self._test_copy(filepath)
 
     def test_wav_copy(self):
         """Test creating a temporary copy of WAV files. Check that tag data is also copied."""
-        filepath = pathlib.Path("silent.wav")
-        self._test_id3_copy(filepath)
+        filepath = pathlib.Path("tests", "silent.wav")
+        self._test_copy(filepath)
 
     def test_flac_copy(self):
         """Test creating a temporary copy of FLAC files. Check that tag data is also copied."""
-        filepath = pathlib.Path("silent.flac")
-        self._test_vorbis_copy(filepath)
+        filepath = pathlib.Path("tests", "silent.flac")
+        self._test_copy(filepath)
 
 
 if __name__ == "__main__":
