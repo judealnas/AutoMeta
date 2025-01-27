@@ -10,6 +10,9 @@ authors = ["Jude Alnas"]
 readme = "README.md"
 packages = [{ include = "autometa", from = "src" }]
 
+[tool.poetry.scripts]
+autometa = "autometa.cli:main"
+
 [tool.poetry.dependencies]
 python = ">=3.11"
 mutagen = "^1.47.0"
@@ -17,6 +20,8 @@ mutagen = "^1.47.0"
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
 pytest = ">=7"
+mypy = "^1.14.1"
+flake8 = "^7.1.1"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

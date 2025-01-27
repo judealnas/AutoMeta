@@ -1,68 +1,106 @@
 import argparse
 import pathlib
 
+import mutagen.flac
+import mutagen.mp3
+
 from autometa.tags import Tags
 
-parser = argparse.ArgumentParser(
+PARSER = argparse.ArgumentParser(
     prog="autometa",
     description="Modify audio file metadata",
 )
-parser.add_argument("filespec", type=pathlib.Path, help="File to modify.")
+PARSER.add_argument("filespec", type=str, help="Files to modify.")
 
 # TODO Specify file format
 # JSON? YAML? All of them?
-parser.add_argument(
+PARSER.add_argument(
     "--metafile",
     type=pathlib.Path,
     help="Specify metadata from file.",
 )
 
 # Tag options
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.ARTIST.lower()}",
     type=str,
     help="Comma-separated sequence of artist names.",
 )
 
-parser.add_argument(
+PARSER.add_argument(
     "--append-artists",
     action="store_true",
     help="Combine new artist names with existing instead of replacing.",
 )
 
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.ALBUM.lower()}",
     type=str,
     help="Album name.",
 )
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.TITLE.lower()}",
     type=str,
     help="Title of the track.",
 )
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.TRACK.lower()}",
     type=int,
     help="Track number.",
 )
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.YEAR.lower()}",
     type=int,
     help="Year of release.",
 )
-parser.add_argument(
+PARSER.add_argument(
     f"--{Tags.GENRE.lower()}",
     type=str,
     help="Genre of the track.",
 )
-parser.add_argument(
-    f"--{Tags.COMMENT.lower()}",
-    type=str,
-    help="Comment.",
+# TODO: Re-activate once comment is supported by Easy ID3
+# PARSER.add_argument(
+#     f"--{Tags.COMMENT.lower()}",
+#     type=str,
+#     help="Comment.",
+# )
+
+PARSER.add_argument(
+    "-v",
+    "--verbose",
+    action="count",
+    default=0,
+    help="Increase verbosity.",
 )
 
-if __name__ == "__main__":
-    args = parser.parse_args()
+
+def setup_logging(verbosity: int):
+    """Set up logging."""
+    import logging
+
+    # Set up logging
+    verbosity_level_map = {
+        0: logging.WARNING,
+        1: logging.INFO,
+        2: logging.DEBUG,
+    }
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        level=verbosity_level_map.get(verbosity, logging.DEBUG),
+    )
+    return logging.getLogger("autometa:cli")
+
+
+def main(args: list[str] | None = None):
+    # Get file
+    import glob
+    import warnings
+    from autometa.easyid3 import easyid3_tag_map
+    from autometa.flac import flac_tag_map
+
+    args = PARSER.parse_args(args)
+    LOGGER = setup_logging(args.verbose)
+    append_artists: bool = args.append_artists
 
     # Extract metadata
     metadata = dict()
@@ -71,18 +109,44 @@ if __name__ == "__main__":
         if value is not None:
             metadata[tag] = value
 
-    # Get file
-    import mutagen
+    filepath = args.filespec
+    files = glob.glob(str(filepath))
+    LOGGER.debug("Files: %s", files)
 
-    from autometa.util.tempcpy import TemporaryCopy
+    for f in files:
+        path = pathlib.Path(f)
+        match path.suffix.lower():
+            case ".mp3":
+                tag_map = easyid3_tag_map
+                file = mutagen.mp3.EasyMP3(path)
+            case ".flac":
+                tag_map = flac_tag_map
+                file = mutagen.flac.FLAC(path)
+            case _:
+                warnings.warn(f"Skipping unsupported file type: {path.parts[-1]}")
+                continue
 
-    filepath = args.filespec.resolve()
-    with TemporaryCopy(filepath) as temp_copy:
-        file: mutagen.FileType = mutagen.File(temp_copy) 
-        if isinstance(file, mutagen.id3.ID3FileType):
-            from autometa.id3 import id3_tag_map
+        # Updating artist
+        LOGGER.debug("Original artist: %s", file[tag_map[Tags.ARTIST]])
+        if Tags.ARTIST in metadata:
+            LOGGER.debug("Artists to add: %s", metadata.get(Tags.ARTIST, None))
+            LOGGER.debug("Appending artists?: %s", append_artists)
+            if append_artists and Tags.ARTIST in file:
+                # Combine new artists
+                file[tag_map[Tags.ARTIST]] += metadata[Tags.ARTIST].split(",")
+            else:
+                file[tag_map[Tags.ARTIST]] = metadata[Tags.ARTIST].split(",")
+            LOGGER.debug("New artist: %s", file[tag_map[Tags.ARTIST]])
+        # Only artist update must be handled separately
+        # Remove from dictionary to avoid updating it again
+        metadata.pop(Tags.ARTIST, None)
 
-            id3_metadata = {id3_tag_map[k]: v for k, v in metadata.items()}
-            print(id3_metadata)
-            file.update(id3_metadata)
+        # Updating other tags
+        for tag, value in metadata.items():
+            if value is not None:
+                LOGGER.debug("Updating %s: %s", tag, value)
+                file[tag_map[tag]] = [value]
+                LOGGER.debug("New %s: %s", tag, file[tag_map[tag]])
 
+        # Save changes
+        file.save()

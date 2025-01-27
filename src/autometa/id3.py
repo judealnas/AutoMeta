@@ -8,7 +8,7 @@ id3_tag_map = {
     Tags.ARTIST: "TPE1",
     Tags.AUTHOR: "TPE2",
     Tags.GENRE: "TCON",
-    Tags.COMMENT: "COMM",
+    # Tags.COMMENT: "COMM",
     Tags.YEAR: "TYER",
 }
 """Map generic tags to supported ID3v2.3 tags."""
