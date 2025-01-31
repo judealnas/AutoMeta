@@ -97,6 +97,7 @@ def main(args: list[str] | None = None):
     import warnings
     from autometa.easyid3 import easyid3_tag_map
     from autometa.flac import flac_tag_map
+    from collections import defaultdict
 
     args = PARSER.parse_args(args)
     LOGGER = setup_logging(args.verbose)
@@ -106,15 +107,17 @@ def main(args: list[str] | None = None):
     metadata = dict()
     for tag in Tags:
         value = getattr(args, tag.lower(), None)
+        LOGGER.debug("Received %s: %s", tag, value)
         if value is not None:
             metadata[tag] = value
 
     filepath = args.filespec
     files = glob.glob(str(filepath))
-    LOGGER.debug("Files: %s", files)
+    LOGGER.debug("Globbed files: %s", files)
 
     for f in files:
         path = pathlib.Path(f)
+        LOGGER.debug("Processing file: %s", path)
         match path.suffix.lower():
             case ".mp3":
                 tag_map = easyid3_tag_map
@@ -124,29 +127,25 @@ def main(args: list[str] | None = None):
                 file = mutagen.flac.FLAC(path)
             case _:
                 warnings.warn(f"Skipping unsupported file type: {path.parts[-1]}")
+                LOGGER.warning(f"Skipping unsupported file type: {path.parts[-1]}")
                 continue
 
-        # Updating artist
-        LOGGER.debug("Original artist: %s", file[tag_map[Tags.ARTIST]])
-        if Tags.ARTIST in metadata:
-            LOGGER.debug("Artists to add: %s", metadata.get(Tags.ARTIST, None))
-            LOGGER.debug("Appending artists?: %s", append_artists)
-            if append_artists and Tags.ARTIST in file:
-                # Combine new artists
-                file[tag_map[Tags.ARTIST]] += metadata[Tags.ARTIST].split(",")
-            else:
-                file[tag_map[Tags.ARTIST]] = metadata[Tags.ARTIST].split(",")
-            LOGGER.debug("New artist: %s", file[tag_map[Tags.ARTIST]])
-        # Only artist update must be handled separately
-        # Remove from dictionary to avoid updating it again
-        metadata.pop(Tags.ARTIST, None)
-
-        # Updating other tags
+        # Updating tags
         for tag, value in metadata.items():
             if value is not None:
                 LOGGER.debug("Updating %s: %s", tag, value)
-                file[tag_map[tag]] = [value]
-                LOGGER.debug("New %s: %s", tag, file[tag_map[tag]])
+                if tag == Tags.ARTIST:
+                    LOGGER.debug("Appending artists?: %s", append_artists)
+                    if append_artists and Tags.ARTIST in file:
+                        # Combine new artists
+                        file[tag_map[Tags.ARTIST]] += metadata[Tags.ARTIST].split(",")
+                    else:
+                        file[tag_map[Tags.ARTIST]] = metadata[Tags.ARTIST].split(",")
+                else:
+                    file[tag_map[tag]] = [value]
+
+                LOGGER.debug("New %s: %s", tag, file.get(tag_map[tag], None))
 
         # Save changes
+        LOGGER.debug("Saving changes to %s", path)
         file.save()
