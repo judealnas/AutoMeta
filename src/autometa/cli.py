@@ -1,10 +1,14 @@
 import argparse
 import pathlib
+import glob
+import warnings
 
 import mutagen.flac
 import mutagen.mp3
 
 from autometa.tags import Tags
+from autometa.easyid3 import easyid3_tag_map
+from autometa.flac import flac_tag_map
 
 PARSER = argparse.ArgumentParser(
     prog="autometa",
@@ -93,18 +97,13 @@ def setup_logging(verbosity: int):
 
 def main(args: list[str] | None = None):
     # Get file
-    import glob
-    import warnings
-    from autometa.easyid3 import easyid3_tag_map
-    from autometa.flac import flac_tag_map
-    from collections import defaultdict
 
     args = PARSER.parse_args(args)
     LOGGER = setup_logging(args.verbose)
     append_artists: bool = args.append_artists
 
     # Extract metadata
-    metadata = dict()
+    metadata = {}
     for tag in Tags:
         value = getattr(args, tag.lower(), None)
         LOGGER.debug("Received %s: %s", tag, value)
@@ -136,11 +135,12 @@ def main(args: list[str] | None = None):
                 LOGGER.debug("Updating %s: %s", tag, value)
                 if tag == Tags.ARTIST:
                     LOGGER.debug("Appending artists?: %s", append_artists)
-                    if append_artists and Tags.ARTIST in file:
+                    artist_data = metadata[Tags.ARTIST].split(",")
+                    if append_artists and tag_map[Tags.ARTIST] in file:
                         # Combine new artists
-                        file[tag_map[Tags.ARTIST]] += metadata[Tags.ARTIST].split(",")
+                        file[tag_map[Tags.ARTIST]] += artist_data
                     else:
-                        file[tag_map[Tags.ARTIST]] = metadata[Tags.ARTIST].split(",")
+                        file[tag_map[Tags.ARTIST]] = artist_data
                 else:
                     file[tag_map[tag]] = [value]
 
