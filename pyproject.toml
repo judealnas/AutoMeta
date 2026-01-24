@@ -1,27 +1,42 @@
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.poetry]
+[project]
 name = "autometa"
 version = "0.1.0"
 description = "Tool for updating metadata for audio files."
-authors = ["Jude Alnas"]
+authors = [{ name = "Jude Alnas" }]
+requires-python = ">=3.11"
 readme = "README.md"
-packages = [{ include = "autometa", from = "src" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = ["mutagen>=1.47.0,<2"]
 
-[tool.poetry.scripts]
+[project.scripts]
 autometa = "autometa.cli:main"
 
-[tool.poetry.dependencies]
-python = ">=3.11"
-mutagen = "^1.47.0"
+[dependency-groups]
+dev = [
+    "ipykernel>=6.29.5,<7",
+    "pytest>=7",
+    "mypy>=1.14.1,<2",
+    "flake8>=7.1.1,<8",
+]
 
-[tool.poetry.group.dev.dependencies]
-ipykernel = "^6.29.5"
-pytest = ">=7"
-mypy = "^1.14.1"
-flake8 = "^7.1.1"
+[tool.hatch.build.targets.sdist]
+include = ["src/autometa"]
+
+[tool.hatch.build.targets.wheel]
+include = ["src/autometa"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/autometa" = "autometa"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
