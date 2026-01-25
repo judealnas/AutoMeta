@@ -11,15 +11,27 @@ import autometa.tags
 from autometa.types import FileTypes, PathLike
 
 
+class UnsupportedFileTypeError(Exception):
+    """Exception raised for unsupported file types."""
+
+    pass
+
+
 class MusicFile:
     def __init__(self, file: PathLike):
         self._path = Path(file)
+        ext = self._path.suffix.lower().lstrip(".")
+
+        try:
+            self._tag_map = autometa.tags.get_tag_map(ext)
+        except NotImplementedError as e:
+            raise UnsupportedFileTypeError(
+                f"File type '{ext}' is not supported for file: {file}"
+            ) from e
+
+        self._ext = ext
         self._file: FileType = File(file)
         self._file_type = type(self._file)
-
-        ext = self._path.suffix.lower().lstrip(".")
-        self._tag_map = autometa.tags.get_tag_map(ext)
-        self._ext = ext
 
     @property
     def path(self) -> Path:

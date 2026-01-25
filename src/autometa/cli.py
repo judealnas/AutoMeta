@@ -3,12 +3,8 @@ import pathlib
 import glob
 import warnings
 
-import mutagen.flac
-import mutagen.mp3
-
 from autometa.tags import Tags
-from autometa.easyid3 import easyid3_tag_map
-from autometa.flac import flac_tag_map
+from autometa.core import MusicFile, UnsupportedFileTypeError
 
 PARSER = argparse.ArgumentParser(
     prog="autometa",
@@ -117,17 +113,14 @@ def main(args: list[str] | None = None):
     for f in files:
         path = pathlib.Path(f)
         LOGGER.debug("Processing file: %s", path)
-        match path.suffix.lower():
-            case ".mp3":
-                tag_map = easyid3_tag_map
-                file = mutagen.mp3.EasyMP3(path)
-            case ".flac":
-                tag_map = flac_tag_map
-                file = mutagen.flac.FLAC(path)
-            case _:
-                warnings.warn(f"Skipping unsupported file type: {path.parts[-1]}")
-                LOGGER.warning(f"Skipping unsupported file type: {path.parts[-1]}")
-                continue
+
+        try:
+            file = MusicFile(path)
+        except UnsupportedFileTypeError as e:
+            filename = path.parts[-1]
+            warnings.warn(f"Skipping unsupported file {filename}: {e}")
+            LOGGER.warning("Skipping unsupported file %s: %s", filename, e)
+            continue
 
         # Updating tags
         for tag, value in metadata.items():
@@ -135,16 +128,21 @@ def main(args: list[str] | None = None):
                 LOGGER.debug("Updating %s: %s", tag, value)
                 if tag == Tags.ARTIST:
                     LOGGER.debug("Appending artists?: %s", append_artists)
-                    artist_data = metadata[Tags.ARTIST].split(",")
-                    if append_artists and tag_map[Tags.ARTIST] in file:
-                        # Combine new artists
-                        file[tag_map[Tags.ARTIST]] += artist_data
-                    else:
-                        file[tag_map[Tags.ARTIST]] = artist_data
+                    artist_data = value.split(",")
+                    if append_artists:
+                        # Get existing artists
+                        existing = file[Tags.ARTIST]
+                        if existing:
+                            # Combine with new artists
+                            if isinstance(existing, list):
+                                artist_data = existing + artist_data
+                            else:
+                                artist_data = [existing] + artist_data
+                    file[Tags.ARTIST] = artist_data
                 else:
-                    file[tag_map[tag]] = [value]
+                    file[tag] = str(value)
 
-                LOGGER.debug("New %s: %s", tag, file.get(tag_map[tag], None))
+                LOGGER.debug("New %s: %s", tag, file[tag])
 
         # Save changes
         LOGGER.debug("Saving changes to %s", path)
