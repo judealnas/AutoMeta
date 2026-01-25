@@ -38,7 +38,7 @@ def get_tag_map(file_type: str) -> dict[Tags, str]:
                     Tags.AUTHOR.value: "TPE2",
                     Tags.GENRE.value: "TCON",
                     Tags.COMMENT.value: "COMM",
-                    Tags.YEAR.value: "TYER",
+                    Tags.YEAR.value: "TDRC",
                     Tags.TRACK.value: "TRCK",
                     Tags.PICTURE.value: "APIC",
                 }
