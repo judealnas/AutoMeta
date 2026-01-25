@@ -11,43 +11,107 @@ pip install autometa
 ## Dependencies
 
 - [Mutagen](https://github.com/quodlibet/mutagen)
-- [pytaglib](https://github.com/supermihi/pytaglib) (maybe?)
-- [watchdog](https://github.com/gorakhargosh/watchdog) (maybe?)
+- [PyYAML](https://github.com/yaml/pyyaml)
 
 ## Usage
 
-### Manual (WIP)
+### Basic Usage
+
+Apply metadata tags to a single file:
 
 ```bash
 autometa my_music.mp3 --artist="Alice,Bob" --title="Foo" --year=2024
 ```
 
-It's also possible to specify a glob pattern to change multiple files at once
+Apply metadata to multiple files using glob patterns:
 
 ```bash
 autometa **/*.mp3 --artist="Bob,Carol"
 ```
 
-Instead of passing metadata through command line, use ``--metadata`` to specify a configuration file containing desired metadata.
+### Configuration Files (Rulefiles)
+
+AutoMeta supports configuration files (rulefiles) that define metadata rules using gitignore-style patterns. This allows you to set metadata for multiple files based on their location and filename.
+
+Use `--rulefile` to specify a configuration file:
 
 ```bash
-autometa my_music.mp3 --metadata="meta.yml"
+autometa **/*.mp3 --rulefile=music_config.yaml
 ```
 
-where ``meta.yml`` contains
+#### Rulefile Format
 
-```yml
-# meta.yml
-title: Foo
-artist: [Bob, Carol]
+Rulefiles use YAML format with multiple documents (separated by `---`). Each document can define:
+- **defaults**: Global metadata applied to all files
+- **filespec patterns**: Specific rules for files matching a pattern
+
+Example `music_config.yaml`:
+
+```yaml
+# Global defaults for all files
+defaults:
+  artist: ["Default Artist"]
+  year: 2024
+
+---
+# All MP3 files
+filespec: "*.mp3"
+artist: ["Artist X"]
+album: "Standard Album"
+
+---
+# Files in a specific directory (more specific)
+filespec: "album1/*.mp3"
+artist: ["Artist X"]
+album: "Album 1"
+year: 2020
+
+---
+# Files matching a pattern (most specific)
+filespec: "album1/feat_*.mp3"
+artist: ["Artist X", "Artist Y"]
+album: "Album 1 - Collaborations"
+
+---
+# Exact file match (highest priority)
+filespec: "album1/special_track.mp3"
+artist: ["Artist X", "Artist Y", "Artist Z"]
+title: "Special Collaboration"
 ```
 
-Tags in the command-line take precedence over those in files.
-Hence, the artist data will be set to "Bar" in the following example:
+#### Priority Rules
+
+AutoMeta applies metadata in the following order (lowest to highest priority):
+
+1. **Defaults** - Global defaults defined in the rulefile
+2. **General patterns** - Less specific filespec patterns (e.g., `*.mp3`)
+3. **Specific patterns** - More specific patterns with directories (e.g., `album1/*.mp3`)
+4. **Exact matches** - Exact filenames (e.g., `album1/track.mp3`)
+5. **Command-line arguments** - Always override everything else
+
+Specificity is determined by:
+- Exact filenames (no wildcards) = highest priority
+- Directory depth (more slashes = more specific)
+- Number of wildcards (fewer = more specific)
+
+#### Command-line Override
+
+Command-line arguments always take precedence over rulefile settings:
 
 ```bash
-autometa my_music.mp3 --metadata="meta.yml" --artist=Bar
+# Artist will be "CLI Artist", but album comes from rulefile
+autometa my_music.mp3 --rulefile=music_config.yaml --artist="CLI Artist"
 ```
+
+### Available Tags
+
+- `--artist`: Comma-separated list of artists
+- `--album`: Album name
+- `--title`: Track title  
+- `--track`: Track number
+- `--year`: Release year
+- `--genre`: Music genre
+- `--append-artists`: Append new artists instead of replacing
 
 **Subject to change**
 Supported config file types are YAML, JSON, INI, or TOML.

@@ -44,7 +44,9 @@ class ConfigRule:
         # Count wildcards (fewer = more specific)
         wildcards = self.pattern.count("*") + self.pattern.count("?")
 
-        return (depth * 100) - wildcards
+        # Depth adds points, wildcards subtract
+        # Base priority of 500 to keep values positive
+        return 500 + (depth * 100) - (wildcards * 10)
 
 
 class Config:
@@ -116,7 +118,11 @@ def load(file: PathLike) -> Config:
             # Check if this is a defaults document
             if "defaults" in doc:
                 for key, value in doc["defaults"].items():
-                    config.defaults[Tags(key.upper())] = value
+                    try:
+                        config.defaults[Tags[key.upper()]] = value
+                    except KeyError:
+                        # Skip unknown tags
+                        continue
                 continue
 
             # Regular rule document
@@ -128,8 +134,8 @@ def load(file: PathLike) -> Config:
 
             for key, value in doc.items():
                 try:
-                    tag_criteria[Tags(key.upper())] = value
-                except ValueError:
+                    tag_criteria[Tags[key.upper()]] = value
+                except (ValueError, KeyError):
                     # Skip unknown tags
                     continue
 
