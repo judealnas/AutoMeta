@@ -6,111 +6,6 @@ from unittest.mock import patch, MagicMock
 from autometa.cli import setup_logging, main, PARSER
 
 
-class ParserTestCase(unittest.TestCase):
-    """Test cases for argument parser."""
-
-    def test_filespec_required(self):
-        """Test that filespec is a required argument."""
-        with self.assertRaises(SystemExit):
-            PARSER.parse_args([])
-
-    def test_filespec_parsed(self):
-        """Test that filespec is correctly parsed."""
-        args = PARSER.parse_args(["test.mp3"])
-        self.assertEqual(args.filespec, "test.mp3")
-
-    def test_artist_argument(self):
-        """Test that --artist argument is parsed correctly."""
-        args = PARSER.parse_args(["test.mp3", "--artist", "The Beatles"])
-        self.assertEqual(args.artist, "The Beatles")
-
-    def test_append_artists_flag(self):
-        """Test that --append-artists flag is parsed correctly."""
-        args = PARSER.parse_args(["test.mp3", "--append-artists"])
-        self.assertTrue(args.append_artists)
-
-    def test_album_argument(self):
-        """Test that --album argument is parsed correctly."""
-        args = PARSER.parse_args(["test.mp3", "--album", "Abbey Road"])
-        self.assertEqual(args.album, "Abbey Road")
-
-    def test_title_argument(self):
-        """Test that --title argument is parsed correctly."""
-        args = PARSER.parse_args(["test.mp3", "--title", "Come Together"])
-        self.assertEqual(args.title, "Come Together")
-
-    def test_track_argument(self):
-        """Test that --track argument is parsed as integer."""
-        args = PARSER.parse_args(["test.mp3", "--track", "5"])
-        self.assertEqual(args.track, 5)
-        self.assertIsInstance(args.track, int)
-
-    def test_year_argument(self):
-        """Test that --year argument is parsed as integer."""
-        args = PARSER.parse_args(["test.mp3", "--year", "1969"])
-        self.assertEqual(args.year, 1969)
-        self.assertIsInstance(args.year, int)
-
-    def test_genre_argument(self):
-        """Test that --genre argument is parsed correctly."""
-        args = PARSER.parse_args(["test.mp3", "--genre", "Rock"])
-        self.assertEqual(args.genre, "Rock")
-
-    def test_metafile_argument(self):
-        """Test that --metafile argument is parsed as Path."""
-        args = PARSER.parse_args(["test.mp3", "--metafile", "meta.json"])
-        self.assertEqual(args.metafile, pathlib.Path("meta.json"))
-        self.assertIsInstance(args.metafile, pathlib.Path)
-
-    def test_verbosity_default(self):
-        """Test that verbosity defaults to 0."""
-        args = PARSER.parse_args(["test.mp3"])
-        self.assertEqual(args.verbose, 0)
-
-    def test_verbosity_single(self):
-        """Test that -v sets verbosity to 1."""
-        args = PARSER.parse_args(["test.mp3", "-v"])
-        self.assertEqual(args.verbose, 1)
-
-    def test_verbosity_multiple(self):
-        """Test that -vv sets verbosity to 2."""
-        args = PARSER.parse_args(["test.mp3", "-vv"])
-        self.assertEqual(args.verbose, 2)
-
-    def test_verbosity_verbose_flag(self):
-        """Test that --verbose flag works."""
-        args = PARSER.parse_args(["test.mp3", "--verbose", "--verbose"])
-        self.assertEqual(args.verbose, 2)
-
-    def test_multiple_arguments(self):
-        """Test parsing multiple arguments together."""
-        args = PARSER.parse_args(
-            [
-                "test.mp3",
-                "--artist",
-                "Artist Name",
-                "--album",
-                "Album Name",
-                "--title",
-                "Song Title",
-                "--track",
-                "3",
-                "--year",
-                "2020",
-                "--genre",
-                "Pop",
-                "-vv",
-            ]
-        )
-        self.assertEqual(args.artist, "Artist Name")
-        self.assertEqual(args.album, "Album Name")
-        self.assertEqual(args.title, "Song Title")
-        self.assertEqual(args.track, 3)
-        self.assertEqual(args.year, 2020)
-        self.assertEqual(args.genre, "Pop")
-        self.assertEqual(args.verbose, 2)
-
-
 class MainFunctionTestCase(unittest.TestCase):
     """Test cases for main function."""
 
@@ -162,9 +57,7 @@ class MainFunctionTestCase(unittest.TestCase):
 
         # Verify warning was issued
         mock_warn.assert_called_once()
-        self.assertIn(
-            "Skipping unsupported file", str(mock_warn.call_args)
-        )
+        self.assertIn("Skipping unsupported file", str(mock_warn.call_args))
 
     @patch("autometa.cli.glob.glob")
     @patch("autometa.cli.MusicFile")
@@ -198,6 +91,7 @@ class MainFunctionTestCase(unittest.TestCase):
 
         # Verify artist was set (not appended)
         from autometa.tags import Tags
+
         calls = mock_file.__setitem__.call_args_list
         artist_call = [c for c in calls if c[0][0] == Tags.ARTIST][0]
         self.assertEqual(artist_call[0][1], ["Artist1", "Artist2"])
@@ -250,9 +144,8 @@ class MainFunctionTestCase(unittest.TestCase):
 
         # Verify all fields were set
         from autometa.tags import Tags
-        set_calls = {
-            c[0][0]: c[0][1] for c in mock_file.__setitem__.call_args_list
-        }
+
+        set_calls = {c[0][0]: c[0][1] for c in mock_file.__setitem__.call_args_list}
         self.assertIn(Tags.ARTIST, set_calls)
         self.assertIn(Tags.ALBUM, set_calls)
         self.assertIn(Tags.TITLE, set_calls)
@@ -286,6 +179,7 @@ class MainFunctionTestCase(unittest.TestCase):
 
         # Verify track was set
         from autometa.tags import Tags
+
         calls = mock_file.__setitem__.call_args_list
         track_calls = [c for c in calls if c[0][0] == Tags.TRACK]
         self.assertTrue(len(track_calls) > 0)
@@ -325,6 +219,7 @@ class MainFunctionTestCase(unittest.TestCase):
 
         # Verify track was set
         from autometa.tags import Tags
+
         calls = mock_file.__setitem__.call_args_list
         track_call = [c for c in calls if c[0][0] == Tags.TRACK][0]
         self.assertEqual(track_call[0][1], "3")

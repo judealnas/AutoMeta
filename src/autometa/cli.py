@@ -5,6 +5,7 @@ import warnings
 
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
+from autometa.config import load as load_config, Config
 
 PARSER = argparse.ArgumentParser(
     prog="autometa",
@@ -12,12 +13,10 @@ PARSER = argparse.ArgumentParser(
 )
 PARSER.add_argument("filespec", type=str, help="Files to modify.")
 
-# TODO Specify file format
-# JSON? YAML? All of them?
 PARSER.add_argument(
-    "--metafile",
+    "--rulefile",
     type=pathlib.Path,
-    help="Specify metadata from file.",
+    help="File containing metadata rules.",
 )
 
 # Tag options
@@ -98,13 +97,19 @@ def main(args: list[str] | None = None):
     LOGGER = setup_logging(args.verbose)
     append_artists: bool = args.append_artists
 
-    # Extract metadata
-    metadata = {}
+    # Load config if provided
+    config: Config | None = None
+    if args.rulefile:
+        LOGGER.info("Loading rulefile: %s", args.rulefile)
+        config = load_config(args.rulefile)
+
+    # Extract metadata from command-line arguments
+    cli_metadata = {}
     for tag in Tags:
         value = getattr(args, tag.lower(), None)
         LOGGER.debug("Received %s: %s", tag, value)
         if value is not None:
-            metadata[tag] = value
+            cli_metadata[tag] = value
 
     filepath = args.filespec
     files = glob.glob(str(filepath))
@@ -122,13 +127,30 @@ def main(args: list[str] | None = None):
             LOGGER.warning("Skipping unsupported file %s: %s", filename, e)
             continue
 
+        # Build metadata: config rules < CLI arguments
+        metadata = {}
+        if config:
+            # Apply config rules for this file
+            config_tags = config.get_tags_for_file(path)
+            metadata.update(config_tags)
+            LOGGER.debug("Config tags for %s: %s", path, config_tags)
+
+        # Override with CLI arguments (higher priority)
+        metadata.update(cli_metadata)
+        LOGGER.debug("Final metadata for %s: %s", path, metadata)
+
         # Updating tags
         for tag, value in metadata.items():
             if value is not None:
                 LOGGER.debug("Updating %s: %s", tag, value)
                 if tag == Tags.ARTIST:
                     LOGGER.debug("Appending artists?: %s", append_artists)
-                    artist_data = value.split(",")
+                    # Handle both string (from CLI) and list (from config)
+                    if isinstance(value, str):
+                        artist_data = value.split(",")
+                    else:
+                        artist_data = value
+
                     if append_artists:
                         # Get existing artists
                         existing = file[Tags.ARTIST]

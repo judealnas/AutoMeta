@@ -1,0 +1,40 @@
+# Example AutoMeta Configuration File
+# This demonstrates how to configure metadata rules for your music library
+
+# Global defaults applied to all files unless overridden
+defaults:
+  artist: ["Default Artist"]
+  year: 2024
+  
+---
+# All MP3 files get this artist and album
+filespec: "*.mp3"
+artist: ["Artist X"]
+album: "Standard Album"
+
+---
+# Files in album1 directory get specific album info
+filespec: "album1/*.mp3"
+artist: ["Artist X"]
+album: "Album 1"
+year: 2020
+
+---
+# Featured tracks have multiple artists
+filespec: "album1/feat_*.mp3"
+artist: ["Artist X", "Artist Y"]
+album: "Album 1 - Collaborations"
+
+---
+# FLAC files in the lossless directory
+filespec: "lossless/*.flac"
+artist: ["Audiophile Artist"]
+album: "High Quality Collection"
+genre: "Classical"
+
+---
+# Exact file match has highest priority
+filespec: "album1/special_track.mp3"
+artist: ["Artist X", "Artist Y", "Artist Z"]
+title: "Special Collaboration"
+genre: "Experimental"
