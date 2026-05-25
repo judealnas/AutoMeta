@@ -20,6 +20,8 @@ dependencies = [
     "more-itertools>=10.8.0",
     "mutagen>=1.47.0,<2",
     "pillow>=12.1.0",
+    "pyyaml>=6.0.3",
+    "watchdog>=6.0.0",
 ]
 
 [project.scripts]
