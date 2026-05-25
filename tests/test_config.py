@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from autometa.config import Config, ConfigRule, load
+from autometa.config import Config, ConfigRule
 from autometa.tags import Tags
 
 
@@ -127,7 +127,7 @@ class LoadConfigTestCase(unittest.TestCase):
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
             self.assertEqual(config.defaults[Tags.ARTIST], ["Default Artist"])
             self.assertEqual(config.defaults[Tags.YEAR], 2024)
         finally:
@@ -151,7 +151,7 @@ artist: ["Artist Y"]
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
             self.assertEqual(len(config.rules), 2)
 
             # Test general rule
@@ -190,7 +190,7 @@ artist: ["Artist X", "Artist Y"]
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
 
             # Test random MP3 gets defaults + general rule
             tags = config.get_tags_for_file("random.mp3")
@@ -227,7 +227,7 @@ unknowntag: "This should be ignored"
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
             tags = config.get_tags_for_file("track.mp3")
             self.assertEqual(tags[Tags.ARTIST], ["Artist"])
             self.assertNotIn("unknowntag", tags)
@@ -249,7 +249,7 @@ defaults:
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
             self.assertIsNotNone(config.watch)
             self.assertFalse(config.watch.enable)
         finally:
@@ -271,7 +271,7 @@ artist: ["Artist X"]
             temp_path = f.name
 
         try:
-            config = load(temp_path)
+            config = Config.load(temp_path)
             self.assertEqual(len(config.rules), 1)
             self.assertIsNotNone(config.rules[0].watch)
             self.assertTrue(config.rules[0].watch.enable)
@@ -294,7 +294,7 @@ artist: ["Artist X"]
 
         try:
             with self.assertRaises(ValueError):
-                load(temp_path)
+                Config.load(temp_path)
         finally:
             Path(temp_path).unlink()
 
@@ -315,7 +315,7 @@ artist: ["Artist X"]
 
         try:
             with self.assertRaises(TypeError):
-                load(temp_path)
+                Config.load(temp_path)
         finally:
             Path(temp_path).unlink()
 

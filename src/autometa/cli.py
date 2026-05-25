@@ -5,7 +5,7 @@ import warnings
 
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
-from autometa.config import load as load_config, Config
+from autometa.config import Config
 
 PARSER = argparse.ArgumentParser(
     prog="autometa",
@@ -101,7 +101,7 @@ def main(args: list[str] | None = None):
     config: Config | None = None
     if args.rulefile:
         LOGGER.info("Loading rulefile: %s", args.rulefile)
-        config = load_config(args.rulefile)
+        config = Config.load(args.rulefile)
 
     # Extract metadata from command-line arguments
     cli_metadata = {}

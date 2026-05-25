@@ -139,121 +139,121 @@ class Config:
 
         return tags
 
+    @classmethod
+    def load(cls, file: PathLike) -> "Config":
+        """Load configuration from a YAML file.
 
-def load(file: PathLike) -> Config:
-    """Load configuration from a YAML file.
+        The expected format is a list of documents. The first document (optional)
+        can contain 'defaults' for global settings. Subsequent documents contain
+        a filespec pattern and associated tag criteria.
 
-    The expected format is a list of documents. The first document (optional)
-    can contain 'defaults' for global settings. Subsequent documents contain
-    a filespec pattern and associated tag criteria.
+        Example YAML content:
+        ```yaml
+        watch:
+          enable: true
+        defaults:
+          artist: ["Default Artist"]
+          year: 2024
+        ---
+        watch:
+          enable: true
+        filespec: "*.mp3"
+        artist: ["Artist X"]
+        album: "Standard Album"
+        ---
+        watch:
+          enable: false
+        filespec: "album1/feat_*.mp3"
+        artist: ["Artist X", "Artist Y"]
+        ```
 
-    Example YAML content:
-    ```yaml
-    watch:
-      enable: true
-    defaults:
-      artist: ["Default Artist"]
-      year: 2024
-    ---
-    watch:
-      enable: true
-    filespec: "*.mp3"
-    artist: ["Artist X"]
-    album: "Standard Album"
-    ---
-    watch:
-      enable: false
-    filespec: "album1/feat_*.mp3"
-    artist: ["Artist X", "Artist Y"]
-    ```
+        Args:
+            file: The path to the configuration file.
 
-    Args:
-        file: The path to the configuration file.
+        Returns:
+            Config object containing defaults and rules
+        """
+        LOGGER.info("Loading config from %s", file)
+        config = cls()
 
-    Returns:
-        Config object containing defaults and rules
-    """
-    LOGGER.info("Loading config from %s", file)
-    config = Config()
+        with open(file, "r", encoding="utf-8") as f:
+            docs = list(yaml.safe_load_all(f))
 
-    with open(file, "r", encoding="utf-8") as f:
-        docs = list(yaml.safe_load_all(f))
+            LOGGER.debug("Loaded %d documents from %s", len(docs), file)
 
-        LOGGER.debug("Loaded %d documents from %s", len(docs), file)
+            for i, doc in enumerate(docs, start=1):
+                if doc is None:
+                    continue
+                if not isinstance(doc, Mapping):
+                    LOGGER.error(
+                        "config document #%d: expected a mapping, got %s",
+                        i,
+                        type(doc).__name__,
+                    )
+                    raise TypeError(
+                        f"config document #{i}: expected a mapping, got {type(doc).__name__}"
+                    )
 
-        for i, doc in enumerate(docs, start=1):
-            if doc is None:
-                continue
-            if not isinstance(doc, Mapping):
-                LOGGER.error(
-                    "config document #%d: expected a mapping, got %s",
-                    i,
-                    type(doc).__name__,
-                )
-                raise TypeError(
-                    f"config document #{i}: expected a mapping, got {type(doc).__name__}"
-                )
+                doc_desc = f"config document #{i}"
+                doc = dict(doc)
 
-            doc_desc = f"config document #{i}"
-            doc = dict(doc)
+                watch_cfg = _parse_watch(doc, doc_desc=doc_desc)
+                doc.pop("watch", None)
 
-            watch_cfg = _parse_watch(doc, doc_desc=doc_desc)
-            doc.pop("watch", None)
+                LOGGER.debug("%s: parsed watch config: %s", doc_desc, watch_cfg)
 
-            LOGGER.debug("%s: parsed watch config: %s", doc_desc, watch_cfg)
+                # Check if this is a defaults document
+                if "defaults" in doc:
+                    if watch_cfg is not None:
+                        config.watch = watch_cfg
 
-            # Check if this is a defaults document
-            if "defaults" in doc:
-                if watch_cfg is not None:
-                    config.watch = watch_cfg
+                    defaults = doc["defaults"]
+                    if not isinstance(defaults, Mapping):
+                        LOGGER.error("%s: 'defaults' must be a mapping", doc_desc)
+                        raise TypeError(f"{doc_desc}: 'defaults' must be a mapping")
 
-                defaults = doc["defaults"]
-                if not isinstance(defaults, Mapping):
-                    LOGGER.error("%s: 'defaults' must be a mapping", doc_desc)
-                    raise TypeError(f"{doc_desc}: 'defaults' must be a mapping")
-
-                for key, value in defaults.items():
-                    try:
-                        config.defaults[Tags[key.upper()]] = value
-                    except KeyError:
-                        LOGGER.debug(
-                            "%s: skipping unknown default tag: %s", doc_desc, key
-                        )
-                        # Skip unknown tags
-                        continue
-                LOGGER.debug("%s: applied defaults: %s", doc_desc, config.defaults)
-                continue
-
-            # Regular rule document
-            if "filespec" not in doc:
-                continue
-
-            filespec = doc.pop("filespec")
-            tag_criteria: dict[Tags, str | list[str]] = {}
-
-            for key, value in doc.items():
-                try:
-                    tag_criteria[Tags[key.upper()]] = value
-                except (ValueError, KeyError):
-                    LOGGER.debug("%s: skipping unknown rule tag: %s", doc_desc, key)
-                    # Skip unknown tags
+                    for key, value in defaults.items():
+                        try:
+                            config.defaults[Tags[key.upper()]] = value
+                        except KeyError:
+                            LOGGER.debug(
+                                "%s: skipping unknown default tag: %s", doc_desc, key
+                            )
+                            # Skip unknown tags
+                            continue
+                    LOGGER.debug("%s: applied defaults: %s", doc_desc, config.defaults)
                     continue
 
-            rule = ConfigRule(filespec, tag_criteria, watch=watch_cfg)
-            rule.priority = rule.calculate_priority()
-            config.rules.append(rule)
-            LOGGER.debug(
-                "%s: added rule %s with priority %s and tags %s",
-                doc_desc,
-                filespec,
-                rule.priority,
-                tag_criteria,
-            )
+                # Regular rule document
+                if "filespec" not in doc:
+                    continue
 
-    LOGGER.info(
-        "Loaded config: %d rules, defaults=%s, watch=%s",
-        len(config.rules),
-        config.defaults,
-        config.watch,
-    )
-    return config
+                filespec = doc.pop("filespec")
+                tag_criteria: dict[Tags, str | list[str]] = {}
+
+                for key, value in doc.items():
+                    try:
+                        tag_criteria[Tags[key.upper()]] = value
+                    except (ValueError, KeyError):
+                        LOGGER.debug("%s: skipping unknown rule tag: %s", doc_desc, key)
+                        # Skip unknown tags
+                        continue
+
+                rule = ConfigRule(filespec, tag_criteria, watch=watch_cfg)
+                rule.priority = rule.calculate_priority()
+                config.rules.append(rule)
+                LOGGER.debug(
+                    "%s: added rule %s with priority %s and tags %s",
+                    doc_desc,
+                    filespec,
+                    rule.priority,
+                    tag_criteria,
+                )
+
+        LOGGER.info(
+            "Loaded config: %d rules, defaults=%s, watch=%s",
+            len(config.rules),
+            config.defaults,
+            config.watch,
+        )
+        return config
