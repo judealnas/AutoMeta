@@ -60,11 +60,13 @@ class ConfigRule:
         tags: dict[Tags, str | list[str]],
         priority: int = 0,
         watch: WatchConfig | None = None,
+        base_path: Path | None = None,
     ):
         self.pattern = pattern
         self.tags = tags
         self.priority = priority  # Higher priority = more specific
         self.watch = watch
+        self.base_path = base_path
         LOGGER.debug(
             "Created ConfigRule(pattern=%s, priority=%s, watch=%s)",
             pattern,
@@ -239,7 +241,13 @@ class Config:
                         # Skip unknown tags
                         continue
 
-                rule = ConfigRule(filespec, tag_criteria, watch=watch_cfg)
+                config_dir = Path(file).expanduser().resolve().parent
+                rule = ConfigRule(
+                    filespec,
+                    tag_criteria,
+                    watch=watch_cfg,
+                    base_path=config_dir,
+                )
                 rule.priority = rule.calculate_priority()
                 config.rules.append(rule)
                 LOGGER.debug(
