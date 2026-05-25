@@ -20,12 +20,7 @@ class ConfigRule:
 
     def matches(self, filepath: PathLike) -> bool:
         """Check if this rule matches the given file path."""
-        filepath = Path(filepath)
-        # Normalize path separators for cross-platform compatibility
-        path_str = str(filepath).replace("\\", "/")
-        pattern = self.pattern.replace("\\", "/")
-
-        return fnmatch(path_str, pattern)
+        return Path(filepath).match(self.pattern)
 
     def calculate_priority(self) -> int:
         """Calculate priority based on pattern specificity.
