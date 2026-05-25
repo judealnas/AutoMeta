@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from typing import Mapping
 from pathlib import Path
-from fnmatch import fnmatch
+import logging
 
 import yaml
 
 from autometa.types import PathLike
 from autometa.tags import Tags
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -16,24 +18,36 @@ class WatchConfig:
 
 def _parse_watch(doc: Mapping, *, doc_desc: str) -> WatchConfig | None:
     if "watch" not in doc:
+        LOGGER.debug("%s: no 'watch' key present", doc_desc)
         return None
 
     watch = doc.get("watch")
     if watch is None:
+        LOGGER.debug("%s: 'watch' is explicitly null", doc_desc)
         return None
 
     if not isinstance(watch, Mapping):
+        LOGGER.error(
+            "%s: 'watch' must be a mapping, got %s", doc_desc, type(watch).__name__
+        )
         raise TypeError(f"{doc_desc}: 'watch' must be a mapping")
 
     if "enable" not in watch:
+        LOGGER.error("%s: 'watch.enable' missing in watch mapping", doc_desc)
         raise ValueError(
             f"{doc_desc}: 'watch.enable' is required when 'watch' is provided"
         )
 
     enable = watch["enable"]
     if not isinstance(enable, bool):
+        LOGGER.error(
+            "%s: 'watch.enable' must be a boolean, got %s",
+            doc_desc,
+            type(enable).__name__,
+        )
         raise TypeError(f"{doc_desc}: 'watch.enable' must be a boolean")
 
+    LOGGER.debug("%s: parsed watch.enable=%s", doc_desc, enable)
     return WatchConfig(enable=enable)
 
 
@@ -51,6 +65,12 @@ class ConfigRule:
         self.tags = tags
         self.priority = priority  # Higher priority = more specific
         self.watch = watch
+        LOGGER.debug(
+            "Created ConfigRule(pattern=%s, priority=%s, watch=%s)",
+            pattern,
+            priority,
+            bool(watch),
+        )
 
     def matches(self, filepath: PathLike) -> bool:
         """Check if this rule matches the given file path."""
@@ -95,6 +115,7 @@ class Config:
         Returns:
             Dictionary of tags to apply, with defaults overridden by matching rules
         """
+        LOGGER.debug("Getting tags for file: %s", filepath)
         # Start with defaults
         tags = self.defaults.copy()
 
@@ -102,9 +123,19 @@ class Config:
         matching_rules = [rule for rule in self.rules if rule.matches(filepath)]
         matching_rules.sort(key=lambda r: r.priority)
 
+        LOGGER.debug("Found %d matching rules for %s", len(matching_rules), filepath)
+
         # Apply rules in order (lower priority first, so higher priority overwrites)
         for rule in matching_rules:
+            LOGGER.debug(
+                "Applying rule %s (priority=%s) to %s",
+                rule.pattern,
+                rule.priority,
+                filepath,
+            )
             tags.update(rule.tags)
+
+        LOGGER.debug("Final tags for %s: %s", filepath, tags)
 
         return tags
 
@@ -142,15 +173,23 @@ def load(file: PathLike) -> Config:
     Returns:
         Config object containing defaults and rules
     """
+    LOGGER.info("Loading config from %s", file)
     config = Config()
 
     with open(file, "r", encoding="utf-8") as f:
         docs = list(yaml.safe_load_all(f))
 
+        LOGGER.debug("Loaded %d documents from %s", len(docs), file)
+
         for i, doc in enumerate(docs, start=1):
             if doc is None:
                 continue
             if not isinstance(doc, Mapping):
+                LOGGER.error(
+                    "config document #%d: expected a mapping, got %s",
+                    i,
+                    type(doc).__name__,
+                )
                 raise TypeError(
                     f"config document #{i}: expected a mapping, got {type(doc).__name__}"
                 )
@@ -161,6 +200,8 @@ def load(file: PathLike) -> Config:
             watch_cfg = _parse_watch(doc, doc_desc=doc_desc)
             doc.pop("watch", None)
 
+            LOGGER.debug("%s: parsed watch config: %s", doc_desc, watch_cfg)
+
             # Check if this is a defaults document
             if "defaults" in doc:
                 if watch_cfg is not None:
@@ -168,14 +209,19 @@ def load(file: PathLike) -> Config:
 
                 defaults = doc["defaults"]
                 if not isinstance(defaults, Mapping):
+                    LOGGER.error("%s: 'defaults' must be a mapping", doc_desc)
                     raise TypeError(f"{doc_desc}: 'defaults' must be a mapping")
 
                 for key, value in defaults.items():
                     try:
                         config.defaults[Tags[key.upper()]] = value
                     except KeyError:
+                        LOGGER.debug(
+                            "%s: skipping unknown default tag: %s", doc_desc, key
+                        )
                         # Skip unknown tags
                         continue
+                LOGGER.debug("%s: applied defaults: %s", doc_desc, config.defaults)
                 continue
 
             # Regular rule document
@@ -189,11 +235,25 @@ def load(file: PathLike) -> Config:
                 try:
                     tag_criteria[Tags[key.upper()]] = value
                 except (ValueError, KeyError):
+                    LOGGER.debug("%s: skipping unknown rule tag: %s", doc_desc, key)
                     # Skip unknown tags
                     continue
 
             rule = ConfigRule(filespec, tag_criteria, watch=watch_cfg)
             rule.priority = rule.calculate_priority()
             config.rules.append(rule)
+            LOGGER.debug(
+                "%s: added rule %s with priority %s and tags %s",
+                doc_desc,
+                filespec,
+                rule.priority,
+                tag_criteria,
+            )
 
+    LOGGER.info(
+        "Loaded config: %d rules, defaults=%s, watch=%s",
+        len(config.rules),
+        config.defaults,
+        config.watch,
+    )
     return config
