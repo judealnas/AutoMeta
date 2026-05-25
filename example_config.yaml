@@ -2,18 +2,24 @@
 # This demonstrates how to configure metadata rules for your music library
 
 # Global defaults applied to all files unless overridden
+watch:
+  enable: true
 defaults:
   artist: ["Default Artist"]
   year: 2024
   
 ---
 # All MP3 files get this artist and album
+watch:
+  enable: true
 filespec: "*.mp3"
 artist: ["Artist X"]
 album: "Standard Album"
 
 ---
 # Files in album1 directory get specific album info
+watch:
+  enable: true
 filespec: "album1/*.mp3"
 artist: ["Artist X"]
 album: "Album 1"
@@ -21,12 +27,16 @@ year: 2020
 
 ---
 # Featured tracks have multiple artists
+watch:
+  enable: true
 filespec: "album1/feat_*.mp3"
 artist: ["Artist X", "Artist Y"]
 album: "Album 1 - Collaborations"
 
 ---
 # FLAC files in the lossless directory
+watch:
+  enable: true
 filespec: "lossless/*.flac"
 artist: ["Audiophile Artist"]
 album: "High Quality Collection"
@@ -34,6 +44,8 @@ genre: "Classical"
 
 ---
 # Exact file match has highest priority
+watch:
+  enable: true
 filespec: "album1/special_track.mp3"
 artist: ["Artist X", "Artist Y", "Artist Z"]
 title: "Special Collaboration"

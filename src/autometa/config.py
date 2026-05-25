@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Mapping
 from pathlib import Path
 from fnmatch import fnmatch
@@ -8,15 +9,48 @@ from autometa.types import PathLike
 from autometa.tags import Tags
 
 
+@dataclass(frozen=True)
+class WatchConfig:
+    enable: bool
+
+
+def _parse_watch(doc: Mapping, *, doc_desc: str) -> WatchConfig | None:
+    if "watch" not in doc:
+        return None
+
+    watch = doc.get("watch")
+    if watch is None:
+        return None
+
+    if not isinstance(watch, Mapping):
+        raise TypeError(f"{doc_desc}: 'watch' must be a mapping")
+
+    if "enable" not in watch:
+        raise ValueError(
+            f"{doc_desc}: 'watch.enable' is required when 'watch' is provided"
+        )
+
+    enable = watch["enable"]
+    if not isinstance(enable, bool):
+        raise TypeError(f"{doc_desc}: 'watch.enable' must be a boolean")
+
+    return WatchConfig(enable=enable)
+
+
 class ConfigRule:
     """Represents a configuration rule with pattern and tags."""
 
     def __init__(
-        self, pattern: str, tags: dict[Tags, str | list[str]], priority: int = 0
+        self,
+        pattern: str,
+        tags: dict[Tags, str | list[str]],
+        priority: int = 0,
+        watch: WatchConfig | None = None,
     ):
         self.pattern = pattern
         self.tags = tags
         self.priority = priority  # Higher priority = more specific
+        self.watch = watch
 
     def matches(self, filepath: PathLike) -> bool:
         """Check if this rule matches the given file path."""
@@ -50,6 +84,7 @@ class Config:
     def __init__(self):
         self.defaults: dict[Tags, str | list[str]] = {}
         self.rules: list[ConfigRule] = []
+        self.watch: WatchConfig | None = None
 
     def get_tags_for_file(self, filepath: PathLike) -> dict[Tags, str | list[str]]:
         """Get the effective tags for a specific file.
@@ -83,14 +118,20 @@ def load(file: PathLike) -> Config:
 
     Example YAML content:
     ```yaml
+    watch:
+      enable: true
     defaults:
       artist: ["Default Artist"]
       year: 2024
     ---
+    watch:
+      enable: true
     filespec: "*.mp3"
     artist: ["Artist X"]
     album: "Standard Album"
     ---
+    watch:
+      enable: false
     filespec: "album1/feat_*.mp3"
     artist: ["Artist X", "Artist Y"]
     ```
@@ -106,13 +147,30 @@ def load(file: PathLike) -> Config:
     with open(file, "r", encoding="utf-8") as f:
         docs = list(yaml.safe_load_all(f))
 
-        for doc in docs:
+        for i, doc in enumerate(docs, start=1):
             if doc is None:
                 continue
+            if not isinstance(doc, Mapping):
+                raise TypeError(
+                    f"config document #{i}: expected a mapping, got {type(doc).__name__}"
+                )
+
+            doc_desc = f"config document #{i}"
+            doc = dict(doc)
+
+            watch_cfg = _parse_watch(doc, doc_desc=doc_desc)
+            doc.pop("watch", None)
 
             # Check if this is a defaults document
             if "defaults" in doc:
-                for key, value in doc["defaults"].items():
+                if watch_cfg is not None:
+                    config.watch = watch_cfg
+
+                defaults = doc["defaults"]
+                if not isinstance(defaults, Mapping):
+                    raise TypeError(f"{doc_desc}: 'defaults' must be a mapping")
+
+                for key, value in defaults.items():
                     try:
                         config.defaults[Tags[key.upper()]] = value
                     except KeyError:
@@ -134,7 +192,7 @@ def load(file: PathLike) -> Config:
                     # Skip unknown tags
                     continue
 
-            rule = ConfigRule(filespec, tag_criteria)
+            rule = ConfigRule(filespec, tag_criteria, watch=watch_cfg)
             rule.priority = rule.calculate_priority()
             config.rules.append(rule)
 

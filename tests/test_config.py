@@ -234,6 +234,91 @@ unknowntag: "This should be ignored"
         finally:
             Path(temp_path).unlink()
 
+    def test_load_watch_enable_on_defaults(self):
+        """Test loading watch.enable on the defaults document."""
+        yaml_content = """watch:
+  enable: false
+defaults:
+  artist: ["Default Artist"]
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            config = load(temp_path)
+            self.assertIsNotNone(config.watch)
+            self.assertFalse(config.watch.enable)
+        finally:
+            Path(temp_path).unlink()
+
+    def test_load_watch_enable_on_rule(self):
+        """Test loading watch.enable on a rule document."""
+        yaml_content = """---
+filespec: "*.mp3"
+watch:
+  enable: true
+artist: ["Artist X"]
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            config = load(temp_path)
+            self.assertEqual(len(config.rules), 1)
+            self.assertIsNotNone(config.rules[0].watch)
+            self.assertTrue(config.rules[0].watch.enable)
+        finally:
+            Path(temp_path).unlink()
+
+    def test_load_watch_requires_enable(self):
+        """Test that a watch section must include watch.enable."""
+        yaml_content = """---
+filespec: "*.mp3"
+watch: {}
+artist: ["Artist X"]
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with self.assertRaises(ValueError):
+                load(temp_path)
+        finally:
+            Path(temp_path).unlink()
+
+    def test_load_watch_enable_must_be_boolean(self):
+        """Test that watch.enable must be a boolean."""
+        yaml_content = """---
+filespec: "*.mp3"
+watch:
+  enable: "yes"
+artist: ["Artist X"]
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = f.name
+
+        try:
+            with self.assertRaises(TypeError):
+                load(temp_path)
+        finally:
+            Path(temp_path).unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

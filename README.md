@@ -49,12 +49,16 @@ Example `music_config.yaml`:
 
 ```yaml
 # Global defaults for all files
+watch:
+  enable: true
 defaults:
   artist: ["Default Artist"]
   year: 2024
 
 ---
 # All MP3 files
+watch:
+  enable: true
 filespec: "*.mp3"
 artist: ["Artist X"]
 album: "Standard Album"
