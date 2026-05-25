@@ -1,23 +1,17 @@
 import logging
-import threading
-import time
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Iterable
 from watchdog.observers import Observer
 from watchdog.events import (
-    FileSystemEventHandler,
     LoggingEventHandler,
-    EVENT_TYPE_CREATED,
-    EVENT_TYPE_MODIFIED,
     FileModifiedEvent,
     FileCreatedEvent,
-    FileSystemEvent,
 )
 from watchdog.events import PatternMatchingEventHandler
 
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
-from autometa.config import ConfigRule
+from autometa.config import Config, ConfigRule
 
 LOGGER = logging.getLogger(__name__)
 
@@ -130,3 +124,36 @@ def build_metadata_observer(rule: ConfigRule) -> Observer:
     )
 
     return observer
+
+
+def _is_watch_enabled(rule: ConfigRule, config: Config) -> bool:
+    if rule.watch is not None:
+        return rule.watch.enable
+    if config.watch is not None:
+        return config.watch.enable
+    return False
+
+
+def build_metadata_observers(config: Config) -> list[Observer]:
+    """Build observers for all watch-enabled rules in a config."""
+    observers: list[Observer] = []
+    for rule in config.rules:
+        if _is_watch_enabled(rule, config):
+            observers.append(build_metadata_observer(rule))
+
+    LOGGER.debug("Built %d observers from config", len(observers))
+    return observers
+
+
+def start_observers(observers: Iterable[Observer]) -> None:
+    """Start all observers in order."""
+    for observer in observers:
+        observer.start()
+
+
+def stop_observers(observers: Iterable[Observer]) -> None:
+    """Stop and join all observers."""
+    for observer in observers:
+        observer.stop()
+    for observer in observers:
+        observer.join()

@@ -1,11 +1,17 @@
 import argparse
-import pathlib
 import glob
+import pathlib
+import time
 import warnings
 
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
 from autometa.config import Config
+from autometa.watcher import (
+    build_metadata_observers,
+    start_observers,
+    stop_observers,
+)
 
 PARSER = argparse.ArgumentParser(
     prog="autometa",
@@ -72,6 +78,23 @@ PARSER.add_argument(
     help="Increase verbosity.",
 )
 
+WATCH_PARSER = argparse.ArgumentParser(
+    prog="autometa watch",
+    description="Watch files and update metadata based on a rulefile.",
+)
+WATCH_PARSER.add_argument(
+    "rulefile",
+    type=pathlib.Path,
+    help="File containing metadata rules.",
+)
+WATCH_PARSER.add_argument(
+    "-v",
+    "--verbose",
+    action="count",
+    default=0,
+    help="Increase verbosity.",
+)
+
 
 def setup_logging(verbosity: int):
     """Set up logging."""
@@ -92,6 +115,28 @@ def setup_logging(verbosity: int):
 
 def main(args: list[str] | None = None):
     # Get file
+    args = [] if args is None else list(args)
+    if args and args[0] == "watch":
+        watch_args = WATCH_PARSER.parse_args(args[1:])
+        LOGGER = setup_logging(watch_args.verbose)
+        LOGGER.info("Loading rulefile: %s", watch_args.rulefile)
+        config = Config.load(watch_args.rulefile)
+
+        observers = build_metadata_observers(config)
+        if not observers:
+            LOGGER.warning("No watch-enabled rules found. Exiting.")
+            return
+
+        start_observers(observers)
+        LOGGER.info("Watching for changes (Ctrl+C to stop).")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            LOGGER.info("Stopping observers...")
+        finally:
+            stop_observers(observers)
+        return
 
     args = PARSER.parse_args(args)
     LOGGER = setup_logging(args.verbose)
