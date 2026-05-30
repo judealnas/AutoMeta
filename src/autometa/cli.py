@@ -465,7 +465,13 @@ def _handle_watch_command(argv: list[str]) -> None:
 
 def main(args: list[str] | None = None):
     # Get file
-    args = [] if args is None else list(args)
+    # If no explicit args provided, use sys.argv[1:] so standard flags like
+    # --help are handled by argparse. Otherwise, use the provided sequence.
+    if args is None:
+        args = sys.argv[1:]
+    else:
+        args = list(args)
+
     if args and args[0] == "watch":
         _handle_watch_command(args[1:])
         return
