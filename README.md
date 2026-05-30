@@ -122,10 +122,21 @@ Supported config file types are YAML, JSON, INI, or TOML.
 The type is inferred from the file extension.
 If no extension given, AutoMeta tries different decoders until one works
 
-### Automated (WIP)
+### Automated Watchers (WIP)
 
-In addition to manual modification, watchdogs can be set up to monitor for changes to files and to ensure that the metadata is present in the targeted files.
+Configure file watchers that apply metadata whenever matching files are created or modified.
 
 ```bash
-autometa init [--metadata] [--<tag>]
+# Configure and start immediately
+autometa watch "*.mp3" --artist="Alice,Bob" --year=2024
+
+# Configure only (save without starting)
+autometa watch "*.mp3" --year=2024 -s
+
+# List configured watchers
+autometa watch list
+
+# Start/stop a watcher by id
+autometa watch start 1
+autometa watch stop 1
 ```
