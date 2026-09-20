@@ -75,8 +75,14 @@ class ConfigRule:
         )
 
     def matches(self, filepath: PathLike) -> bool:
-        """Check if this rule matches the given file path."""
-        return Path(filepath).match(self.pattern)
+        """Check if this rule matches the given file path.
+
+        Backslashes are normalized to forward slashes so that path matching
+        behaves identically across platforms.
+        """
+        # Normalize Windows-style separators to POSIX separators before matching
+        normalized = str(filepath).replace("\\", "/")
+        return Path(normalized).match(self.pattern)
 
     def calculate_priority(self) -> int:
         """Calculate priority based on pattern specificity.
