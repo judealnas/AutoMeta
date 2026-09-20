@@ -11,7 +11,6 @@ from watchdog.events import PatternMatchingEventHandler
 
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
-from autometa.config import Config, ConfigRule
 
 LOGGER = logging.getLogger(__name__)
 
@@ -136,42 +135,6 @@ class MetadataEventHandler(PatternMatchingEventHandler):
         return current_value == desired_value
 
 
-def build_metadata_observer(rule: ConfigRule) -> Observer:
-    """Build an observer for a configuration rule.
-
-    Creates an observer with a MetadataEventHandler and LoggingEventHandler
-    configured for the rule's pattern and desired metadata tags.
-
-    Args:
-        rule: A ConfigRule specifying the file pattern and desired metadata tags
-
-    Returns:
-        An Observer configured with handlers but not yet started
-    """
-    observer = Observer()
-    watch_root = rule.base_path or Path.cwd()
-
-    # Create handlers
-    metadata_handler = MetadataEventHandler(
-        patterns=[_make_absolute_pattern(rule.pattern, watch_root)],
-        desired_metadata=rule.tags,
-    )
-    logging_handler = LoggingEventHandler()
-
-    # Schedule handlers on the observer
-    observer.schedule(metadata_handler, path=str(watch_root), recursive=True)
-    observer.schedule(logging_handler, path=str(watch_root), recursive=True)
-
-    LOGGER.debug(
-        "Built observer for rule pattern=%s, tags=%s, watch_root=%s",
-        rule.pattern,
-        rule.tags,
-        watch_root,
-    )
-
-    return observer
-
-
 def build_metadata_observer_for_watch(
     pattern: str,
     desired_metadata: dict[Tags, str | list[str]],
@@ -214,25 +177,6 @@ def _make_absolute_pattern(pattern: str, watch_root: Path) -> str:
     if pattern_path.is_absolute():
         return str(pattern_path)
     return str(watch_root / pattern_path)
-
-
-def _is_watch_enabled(rule: ConfigRule, config: Config) -> bool:
-    if rule.watch is not None:
-        return rule.watch.enable
-    if config.watch is not None:
-        return config.watch.enable
-    return False
-
-
-def build_metadata_observers(config: Config) -> list[Observer]:
-    """Build observers for all watch-enabled rules in a config."""
-    observers: list[Observer] = []
-    for rule in config.rules:
-        if _is_watch_enabled(rule, config):
-            observers.append(build_metadata_observer(rule))
-
-    LOGGER.debug("Built %d observers from config", len(observers))
-    return observers
 
 
 def start_observers(observers: Iterable[Observer]) -> None:
