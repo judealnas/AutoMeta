@@ -8,12 +8,16 @@ import sys
 import time
 import warnings
 
+from pathlib import Path
+
 from autometa.tags import Tags
 from autometa.core import MusicFile, UnsupportedFileTypeError
 from autometa.config import Config
+from autometa.logging_util import setup_logging
 from autometa.watch_store import (
     WatchSpec,
     get_watch_store_path,
+    is_watch_running,
     load_watch_store,
     normalize_metadata,
     normalize_watch_pattern,
@@ -153,23 +157,6 @@ add_metadata_arguments(
 )
 
 
-def setup_logging(verbosity: int):
-    """Set up logging."""
-    import logging
-
-    # Set up logging
-    verbosity_level_map = {
-        0: logging.WARNING,
-        1: logging.INFO,
-        2: logging.DEBUG,
-    }
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        level=verbosity_level_map.get(verbosity, logging.DEBUG),
-    )
-    return logging.getLogger("autometa:cli")
-
-
 def _collect_metadata_from_args(
     args: argparse.Namespace,
 ) -> dict[Tags, str | list[str] | int]:
@@ -199,34 +186,18 @@ def _find_watch(watchers: list[WatchSpec], watch_id: int) -> WatchSpec | None:
     return next((watch for watch in watchers if watch.id == watch_id), None)
 
 
-def _is_process_running(pid: int) -> bool:
-    """Check if a process with the given PID is still running.
-
-    Uses os.kill with signal 0 to check process existence in a cross-platform
-    manner (works on Windows and Unix-like systems).
-
-    :param pid: Process ID to check
-    :return: True if process exists, False otherwise
-    """
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
 def _terminate_process(pid: int) -> bool:
-    """Attempt to terminate a process gracefully.
+    """Send SIGTERM to the watcher process.
 
-    Sends SIGTERM to the process and checks if it has stopped after a short
-    delay. Returns True if the process is no longer running.
+    Sends a graceful-termination signal to the given PID. This reports whether
+    the signal was *delivered*, not whether the process has exited -- the
+    runner tears down its watchdog observer asynchronously after receiving the
+    signal, so callers should wait for the runner to release its liveness lock
+    (e.g. :func:`_wait_until_stopped`) rather than timing how quickly it dies.
 
     :param pid: Process ID to terminate
-    :return: True if process was terminated, False otherwise
+    :return: True if the signal was sent, False if the process could not be
+        signaled (already gone or permission denied)
     """
     try:
         os.kill(pid, signal.SIGTERM)
@@ -234,24 +205,32 @@ def _terminate_process(pid: int) -> bool:
         return False
     except PermissionError:
         return False
-    time.sleep(0.2)
-    return not _is_process_running(pid)
+    return True
 
 
-def _spawn_watch_process(watch_id: int, verbosity: int) -> int:
+def _spawn_watch_process(watch_id: int, store_path: Path, verbosity: int) -> int:
     """Spawn a background watcher process.
 
-    Creates a detached subprocess that runs the watch_runner module. On Windows,
-    uses DETACHED_PROCESS flag; on Unix, uses start_new_session to detach from
-    the parent process group.
+    Creates a detached subprocess that runs the watch_runner module. The
+    runner resolves the watch store path explicitly and acquires its own
+    liveness lock. On Windows, uses DETACHED_PROCESS flag; on Unix, uses
+    start_new_session to detach from the parent process group.
 
     :param watch_id: ID of the watcher to run
+    :param store_path: Path to the watch store file
     :param verbosity: Verbosity level (0-2) for logging
     :return: Process ID of spawned watcher
     """
-    cmd = [sys.executable, "-m", "autometa.watch_runner", str(watch_id)]
+    cmd = [
+        sys.executable,
+        "-m",
+        "autometa.watch_runner",
+        "--store",
+        str(store_path),
+        str(watch_id),
+    ]
     if verbosity:
-        cmd.insert(3, f"-{'v' * verbosity}")
+        cmd.append(f"-{'v' * verbosity}")
 
     if os.name == "nt":
         creationflags = (
@@ -275,23 +254,43 @@ def _spawn_watch_process(watch_id: int, verbosity: int) -> int:
     return process.pid
 
 
-def _refresh_watch_statuses(watchers: list[WatchSpec]) -> None:
-    """Update watcher statuses based on process availability.
+def _wait_until_running(
+    store_path: Path, watch_id: int, timeout: float = 5.0
+) -> tuple[bool, int | None]:
+    """Wait until the watcher's liveness lock becomes held.
 
-    Checks if any running watchers still have active processes. Marks
-    watchers as stopped if their PIDs no longer exist and persists changes
-    to storage.
+    Polls :func:`is_watch_running` until the runner acquires its lock (within
+    ``timeout`` seconds) or the deadline passes.
 
-    :param watchers: List of WatchSpec objects to refresh
+    :param store_path: Path to the watch store file
+    :param watch_id: ID of the watcher to wait for
+    :param timeout: Maximum seconds to wait
+    :return: (True, pid) once running, else (False, None)
     """
-    updated = False
-    for watch in watchers:
-        if watch.pid and not _is_process_running(watch.pid):
-            watch.pid = None
-            watch.status = "stopped"
-            updated = True
-    if updated:
-        save_watch_store(watchers)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        running, pid = is_watch_running(store_path, watch_id)
+        if running:
+            return True, pid
+        time.sleep(0.05)
+    return False, None
+
+
+def _wait_until_stopped(store_path: Path, watch_id: int, timeout: float = 5.0) -> bool:
+    """Wait until the watcher's liveness lock is released.
+
+    :param store_path: Path to the watch store file
+    :param watch_id: ID of the watcher to wait for
+    :param timeout: Maximum seconds to wait
+    :return: True if the lock was released, False on timeout
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        running, _ = is_watch_running(store_path, watch_id)
+        if not running:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _format_metadata(metadata: dict[str, str | list[str]]) -> str:
@@ -316,20 +315,25 @@ def _format_metadata(metadata: dict[str, str | list[str]]) -> str:
     return ", ".join(parts)
 
 
-def _format_watch_table(watchers: list[WatchSpec]) -> str:
+def _format_watch_table(watchers: list[WatchSpec], store_path: Path) -> str:
     """Format watcher list as a formatted ASCII table.
 
     Creates a table with columns for ID, Status, Pattern, and Metadata.
+    Status is derived from each watcher's liveness lock at render time.
     Automatically sizes columns to fit content.
 
     :param watchers: List of WatchSpec objects to display
+    :param store_path: Path to the watch store file (for status lookup)
     :return: Formatted table string
     """
     headers = ["ID", "Status", "Pattern", "Metadata"]
-    rows = [
-        [str(watch.id), watch.status, watch.pattern, _format_metadata(watch.metadata)]
-        for watch in watchers
-    ]
+    rows = []
+    for watch in watchers:
+        running, _ = is_watch_running(store_path, watch.id)
+        status = "running" if running else "stopped"
+        rows.append(
+            [str(watch.id), status, watch.pattern, _format_metadata(watch.metadata)]
+        )
     widths = [
         max(len(headers[idx]), *(len(row[idx]) for row in rows))
         if rows
@@ -369,15 +373,15 @@ def _handle_watch_command(argv: list[str]) -> None:
     if argv[0] in {"list", "start", "stop"}:
         parsed = WATCH_ACTION_PARSER.parse_args(argv)
         logger = setup_logging(parsed.verbose)
-        watchers = load_watch_store()
-        _refresh_watch_statuses(watchers)
+        store_path = get_watch_store_path()
+        watchers = load_watch_store(store_path)
 
         if parsed.action == "list":
             if not watchers:
-                logger.info("No watchers configured. Store: %s", get_watch_store_path())
-                print(_format_watch_table([]))
+                logger.info("No watchers configured. Store: %s", store_path)
+                print(_format_watch_table([], store_path))
                 return
-            print(_format_watch_table(watchers))
+            print(_format_watch_table(watchers, store_path))
             return
 
         watch = _find_watch(watchers, parsed.id)
@@ -386,10 +390,9 @@ def _handle_watch_command(argv: list[str]) -> None:
             return
 
         if parsed.action == "start":
-            if watch.pid and _is_process_running(watch.pid):
-                logger.info(
-                    "Watcher %s is already running (pid=%s).", watch.id, watch.pid
-                )
+            running, pid = is_watch_running(store_path, watch.id)
+            if running:
+                logger.info("Watcher %s is already running (pid=%s).", watch.id, pid)
                 return
 
             watch_root = pathlib.Path(watch.watch_root)
@@ -397,38 +400,33 @@ def _handle_watch_command(argv: list[str]) -> None:
                 logger.error("Watch root does not exist: %s", watch_root)
                 return
 
-            pid = _spawn_watch_process(watch.id, parsed.verbose)
-            watch.pid = pid
-            watch.status = "running"
-            save_watch_store(watchers)
-            logger.info("Watcher %s started (pid=%s).", watch.id, pid)
+            _spawn_watch_process(watch.id, store_path, parsed.verbose)
+            ok, pid = _wait_until_running(store_path, watch.id)
+            if ok:
+                logger.info("Watcher %s started (pid=%s).", watch.id, pid)
+            else:
+                logger.error("Watcher %s failed to start within timeout.", watch.id)
             return
 
         if parsed.action == "stop":
-            if not watch.pid:
-                watch.status = "stopped"
-                save_watch_store(watchers)
+            running, pid = is_watch_running(store_path, watch.id)
+            if not running:
                 logger.warning("Watcher %s is not running.", watch.id)
                 return
 
-            if not _is_process_running(watch.pid):
-                watch.pid = None
-                watch.status = "stopped"
-                save_watch_store(watchers)
-                logger.warning("Watcher %s is not running.", watch.id)
+            if pid is None or not _terminate_process(pid):
+                logger.error("Failed to stop watcher %s (pid=%s).", watch.id, pid)
                 return
 
-            if _terminate_process(watch.pid):
-                watch.pid = None
-                watch.status = "stopped"
-                save_watch_store(watchers)
+            if _wait_until_stopped(store_path, watch.id):
                 logger.info("Watcher %s stopped.", watch.id)
             else:
-                logger.error("Failed to stop watcher %s (pid=%s).", watch.id, watch.pid)
+                logger.warning("Watcher %s may still be shutting down.", watch.id)
             return
 
     parsed = WATCH_CONFIG_PARSER.parse_args(argv)
     logger = setup_logging(parsed.verbose)
+    store_path = get_watch_store_path()
     raw_metadata = _collect_metadata_from_args(parsed)
     metadata = normalize_metadata(raw_metadata)
     if not metadata:
@@ -439,28 +437,27 @@ def _handle_watch_command(argv: list[str]) -> None:
         parsed.pattern, default_root
     )
 
-    watchers = load_watch_store()
+    watchers = load_watch_store(store_path)
     next_id = max((watch.id for watch in watchers), default=0) + 1
     watch = WatchSpec(
         id=next_id,
         pattern=normalized_pattern,
         metadata=metadata,
         watch_root=str(watch_root),
-        status="stopped",
-        pid=None,
     )
     watchers.append(watch)
-    save_watch_store(watchers)
+    save_watch_store(watchers, store_path)
     logger.info("Watcher %s saved (root=%s).", watch.id, watch_root)
 
     if parsed.save_only:
         return
 
-    pid = _spawn_watch_process(watch.id, parsed.verbose)
-    watch.pid = pid
-    watch.status = "running"
-    save_watch_store(watchers)
-    logger.info("Watcher %s started (pid=%s).", watch.id, pid)
+    _spawn_watch_process(watch.id, store_path, parsed.verbose)
+    ok, pid = _wait_until_running(store_path, watch.id)
+    if ok:
+        logger.info("Watcher %s started (pid=%s).", watch.id, pid)
+    else:
+        logger.error("Watcher %s failed to start within timeout.", watch.id)
 
 
 def main(args: list[str] | None = None):
