@@ -133,10 +133,19 @@ autometa watch "*.mp3" --artist="Alice,Bob" --year=2024
 # Configure only (save without starting)
 autometa watch "*.mp3" --year=2024 -s
 
-# List configured watchers
+# List configured watchers (status derived from each watcher's liveness lock)
 autometa watch list
 
 # Start/stop a watcher by id
 autometa watch start 1
 autometa watch stop 1
 ```
+
+Watcher state is deliberately **not** stored in the configuration file. The
+watch store holds only config (`id`, `pattern`, `metadata`, `watch_root`).
+Whether a watcher is currently running is derived from a per-watcher liveness
+lockfile that the background runner holds open for its lifetime and that the
+operating system releases automatically when the process exits (including on
+a crash). On ``watch start`` the CLI spawns the runner and waits for it to
+acquire the lock; on ``watch stop`` it sends SIGTERM and waits for the runner
+to release the lock once it has torn down its filesystem observer gracefully.
