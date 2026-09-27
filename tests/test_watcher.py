@@ -1,89 +1,188 @@
-import shutil
-import tempfile
-import time
-import unittest
-from pathlib import Path
+"""Behavior tests for the foreground reconciliation watcher service."""
 
-from autometa.core import MusicFile
-from autometa.tags import Tags
+from pathlib import Path
+import time
+
+from watchdog.events import (
+    DirCreatedEvent,
+    FileCreatedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+)
+
+from autometa.watch_store import WatchRule
 from autometa.watcher import (
-    build_metadata_observer_for_watch,
-    start_observers,
-    stop_observers,
+    DebounceQueue,
+    EventNormalizer,
+    FileStabilityProbe,
+    MetadataReconciler,
+    PathMatcher,
 )
 
 
-class WatcherObserverTestCase(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.test_dir = Path(__file__).parent
-        cls.mp3_file = cls.test_dir / "silent.mp3"
+def test_matcher_matches_basenames_at_nested_depth_and_excludes_win(
+    tmp_path: Path,
+) -> None:
+    """Recursive basename includes match nested files while excludes override."""
+    root = tmp_path / "music"
+    nested = root / "album" / "track.mp3"
+    nested.parent.mkdir(parents=True)
+    nested.touch()
+    rule = WatchRule.create(
+        root=root,
+        include=["*.mp3"],
+        exclude=["*.part", "skip*.mp3"],
+        recursive=True,
+        metadata={"year": "2024"},
+    )
+    matcher = PathMatcher(rule)
 
-        if not cls.mp3_file.exists():
-            raise FileNotFoundError(f"Test file not found: {cls.mp3_file}")
-
-    def _wait_for_tag(
-        self,
-        file_path: Path,
-        tag: Tags,
-        expected: str,
-        timeout: float = 5.0,
-    ) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if MusicFile(file_path)[tag] == expected:
-                return True
-            time.sleep(0.1)
-        return False
-
-    def test_observer_updates_metadata_on_create(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            watch_root = Path(tmp_dir)
-            target_path = watch_root / "new_track.mp3"
-            desired_metadata = {Tags.TITLE: "Observed Title"}
-            observer = build_metadata_observer_for_watch(
-                "*.mp3",
-                desired_metadata,
-                watch_root=watch_root,
-            )
-
-            start_observers([observer])
-            try:
-                time.sleep(0.2)
-                shutil.copy2(self.mp3_file, target_path)
-                self.assertTrue(
-                    self._wait_for_tag(target_path, Tags.TITLE, "Observed Title")
-                )
-            finally:
-                stop_observers([observer])
-
-    def test_observer_updates_metadata_on_modify(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            watch_root = Path(tmp_dir)
-            target_path = watch_root / "modified_track.mp3"
-            shutil.copy2(self.mp3_file, target_path)
-
-            music = MusicFile(target_path)
-            music[Tags.TITLE] = "Wrong Title"
-            music.save()
-
-            desired_metadata = {Tags.TITLE: "Updated Title"}
-            observer = build_metadata_observer_for_watch(
-                "*.mp3",
-                desired_metadata,
-                watch_root=watch_root,
-            )
-
-            start_observers([observer])
-            try:
-                time.sleep(0.2)
-                target_path.touch()
-                self.assertTrue(
-                    self._wait_for_tag(target_path, Tags.TITLE, "Updated Title")
-                )
-            finally:
-                stop_observers([observer])
+    assert matcher.matches(nested)
+    assert not matcher.matches(root / "album" / "skip-track.mp3")
+    assert not matcher.matches(root / "album" / "track.part")
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_normalizer_uses_move_destination_and_ignores_directories(
+    tmp_path: Path,
+) -> None:
+    """Created, modified, and moved destination paths become file candidates."""
+    normalizer = EventNormalizer()
+    target = tmp_path / "target.mp3"
+
+    assert normalizer.path_for(FileCreatedEvent(str(target))) == target
+    assert normalizer.path_for(FileModifiedEvent(str(target))) == target
+    assert normalizer.path_for(FileMovedEvent("/tmp/source.mp3", str(target))) == target
+    assert normalizer.path_for(DirCreatedEvent(str(tmp_path))) is None
+
+
+def test_debounce_queue_coalesces_event_storm(tmp_path: Path) -> None:
+    """Repeated events for one canonical path produce one ready job."""
+    queue = DebounceQueue(delay=0)
+    path = tmp_path / "track.mp3"
+    for _ in range(30):
+        queue.put(path)
+
+    assert queue.pop_ready() == [path.resolve()]
+    assert queue.pop_ready() == []
+
+
+def test_stability_probe_requires_two_unchanged_observations(tmp_path: Path) -> None:
+    """A probe only accepts a file after its size and mtime settle."""
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"one")
+    probe = FileStabilityProbe(settle_seconds=0)
+
+    assert probe.ready(path) is False
+    assert probe.ready(path) is True
+    time.sleep(0.002)
+    path.write_bytes(b"two")
+    assert probe.ready(path) is False
+
+
+def test_reconciler_is_idempotent_and_isolates_malformed_file(tmp_path: Path) -> None:
+    """A reconciliation saves once and never lets media exceptions escape."""
+
+    class FakeFile:
+        def __init__(self) -> None:
+            self.values = {"year": "2000"}
+            self.saves = 0
+
+        def __getitem__(self, key):
+            return self.values.get(key.value)
+
+        def __setitem__(self, key, value):
+            self.values[key.value] = value
+
+        def save(self) -> None:
+            self.saves += 1
+
+    fake = FakeFile()
+    reconciler = MetadataReconciler(lambda _: fake)
+    rule = WatchRule.create(root=tmp_path, metadata={"year": "2024"})
+    path = tmp_path / "track.mp3"
+
+    assert reconciler.reconcile(path, rule) is True
+    assert reconciler.reconcile(path, rule) is False
+    assert fake.saves == 1
+
+    broken = MetadataReconciler(
+        lambda _: (_ for _ in ()).throw(ValueError("bad media"))
+    )
+    assert broken.reconcile(path, rule) is False
+
+
+def test_service_reports_observer_death_and_singleton_failure(tmp_path: Path) -> None:
+    """An observer that dies is unhealthy and a second service cannot start."""
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService, acquire_service_lock
+
+    class DeadObserver:
+        def schedule(self, *args, **kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return False
+
+        def stop(self) -> None:
+            pass
+
+        def join(self) -> None:
+            pass
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store = RuleStore(tmp_path / "watchers.yaml")
+    store.add(WatchRule.create(root=root, metadata={"year": "2024"}))
+    assert WatchService(store, observer_factory=DeadObserver).run() == 1
+    with acquire_service_lock(store.path):
+        assert WatchService(store, observer_factory=DeadObserver).run() == 1
+
+
+def test_service_startup_scan_reconciles_existing_file(tmp_path: Path) -> None:
+    """Startup scan queues existing files even without a filesystem event."""
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    class Observer:
+        def schedule(self, *args, **kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def join(self) -> None:
+            pass
+
+    root = tmp_path / "music"
+    root.mkdir()
+    target = root / "existing.mp3"
+    target.write_bytes(b"x")
+    store = RuleStore(tmp_path / "watchers.yaml")
+    store.add(WatchRule.create(root=root, include=["*.mp3"], metadata={"year": "2024"}))
+    seen: list[Path] = []
+    reconciler = MetadataReconciler(lambda path: seen.append(path) or object())
+    service = WatchService(
+        store, observer_factory=Observer, reconciler=reconciler, debounce_delay=0
+    )
+    service.probe = FileStabilityProbe(settle_seconds=0)
+
+    def stop_soon() -> None:
+        time.sleep(0.15)
+        service.request_shutdown()
+
+    import threading
+
+    thread = threading.Thread(target=stop_soon)
+    thread.start()
+    assert service.run() == 0
+    thread.join()
+    assert target in seen

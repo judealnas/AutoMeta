@@ -1,4 +1,5 @@
 """Tests for the config module."""
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,9 +57,7 @@ class ConfigRuleTestCase(unittest.TestCase):
         deeper = ConfigRule("*/track.mp3", {Tags.ARTIST: ["Test"]})
         # "*.mp3" has no directory depth = less specific
         shallow = ConfigRule("*.mp3", {Tags.ARTIST: ["Test"]})
-        self.assertGreater(
-            deeper.calculate_priority(), shallow.calculate_priority()
-        )
+        self.assertGreater(deeper.calculate_priority(), shallow.calculate_priority())
 
 
 class ConfigTestCase(unittest.TestCase):
@@ -88,9 +87,7 @@ class ConfigTestCase(unittest.TestCase):
         """Test that higher priority rules override lower priority ones."""
         config = Config()
         rule1 = ConfigRule("*.mp3", {Tags.ARTIST: ["General"]}, priority=10)
-        rule2 = ConfigRule(
-            "album1/*.mp3", {Tags.ARTIST: ["Specific"]}, priority=100
-        )
+        rule2 = ConfigRule("album1/*.mp3", {Tags.ARTIST: ["Specific"]}, priority=100)
         config.rules = [rule1, rule2]
 
         tags = config.get_tags_for_file("album1/track.mp3")
@@ -119,9 +116,7 @@ class LoadConfigTestCase(unittest.TestCase):
   artist: ["Default Artist"]
   year: 2024
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             temp_path = f.name
@@ -143,9 +138,7 @@ album: "Standard Album"
 filespec: "album1/*.mp3"
 artist: ["Artist Y"]
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             temp_path = f.name
@@ -182,9 +175,7 @@ year: 2020
 filespec: "album1/feat_*.mp3"
 artist: ["Artist X", "Artist Y"]
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             temp_path = f.name
@@ -219,9 +210,7 @@ filespec: "*.mp3"
 artist: ["Artist"]
 unknowntag: "This should be ignored"
 """
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             temp_path = f.name
@@ -234,90 +223,9 @@ unknowntag: "This should be ignored"
         finally:
             Path(temp_path).unlink()
 
-    def test_load_watch_enable_on_defaults(self):
-        """Test loading watch.enable on the defaults document."""
-        yaml_content = """watch:
-  enable: false
-defaults:
-  artist: ["Default Artist"]
-"""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            temp_path = f.name
-
-        try:
-            config = Config.load(temp_path)
-            self.assertIsNotNone(config.watch)
-            self.assertFalse(config.watch.enable)
-        finally:
-            Path(temp_path).unlink()
-
-    def test_load_watch_enable_on_rule(self):
-        """Test loading watch.enable on a rule document."""
-        yaml_content = """---
-filespec: "*.mp3"
-watch:
-  enable: true
-artist: ["Artist X"]
-"""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            temp_path = f.name
-
-        try:
-            config = Config.load(temp_path)
-            self.assertEqual(len(config.rules), 1)
-            self.assertIsNotNone(config.rules[0].watch)
-            self.assertTrue(config.rules[0].watch.enable)
-        finally:
-            Path(temp_path).unlink()
-
-    def test_load_watch_requires_enable(self):
-        """Test that a watch section must include watch.enable."""
-        yaml_content = """---
-filespec: "*.mp3"
-watch: {}
-artist: ["Artist X"]
-"""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            temp_path = f.name
-
-        try:
-            with self.assertRaises(ValueError):
-                Config.load(temp_path)
-        finally:
-            Path(temp_path).unlink()
-
-    def test_load_watch_enable_must_be_boolean(self):
-        """Test that watch.enable must be a boolean."""
-        yaml_content = """---
-filespec: "*.mp3"
-watch:
-  enable: "yes"
-artist: ["Artist X"]
-"""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yaml", delete=False
-        ) as f:
-            f.write(yaml_content)
-            f.flush()
-            temp_path = f.name
-
-        try:
-            with self.assertRaises(TypeError):
-                Config.load(temp_path)
-        finally:
-            Path(temp_path).unlink()
+    def test_rulefile_has_no_watch_enable_model(self):
+        """Rulefiles no longer carry watch runtime configuration."""
+        self.assertFalse(hasattr(Config(), "watch"))
 
 
 if __name__ == "__main__":

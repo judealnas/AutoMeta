@@ -1,75 +1,92 @@
-"""Tests for the watch store's liveness-lock helpers."""
+"""Behavior tests for declarative watch rule persistence."""
 
-import tempfile
-import unittest
 from pathlib import Path
 
-from autometa.watch_store import (
-    WatchSpec,
-    acquire_liveness_lock,
-    is_watch_running,
-    liveness_lock_path,
-    save_watch_store,
-)
+import pytest
+
+from autometa.watch_store import WatchRule
 
 
-class LivenessLockTestCase(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.store = Path(self._tmp.name) / "watchers.yaml"
-        self.root = Path(self._tmp.name) / "music"
-        self.root.mkdir()
+def test_watch_rule_validates_directory_and_known_nonempty_metadata(
+    tmp_path: Path,
+) -> None:
+    """A rule stores a UUID-shaped ID and normalized metadata."""
+    root = tmp_path / "music"
+    root.mkdir()
 
-    def _seed(self):
-        save_watch_store(
-            [
-                WatchSpec(
-                    id=1,
-                    pattern="*.mp3",
-                    metadata={"year": "2024"},
-                    watch_root=str(self.root),
-                )
-            ],
-            self.store,
+    rule = WatchRule.create(
+        root=root,
+        include=["*.mp3"],
+        exclude=["*.part"],
+        recursive=True,
+        metadata={"artist": ["Alice"], "year": "2024"},
+    )
+
+    assert rule.root == str(root.resolve())
+    assert rule.include == ["*.mp3"]
+    assert rule.exclude == ["*.part"]
+    assert rule.recursive is True
+    assert rule.metadata == {"artist": ["Alice"], "year": "2024"}
+    assert len(rule.id) == 36
+
+    with pytest.raises(ValueError, match="directory"):
+        WatchRule.create(root=tmp_path / "missing", metadata={"year": "2024"})
+    with pytest.raises(ValueError, match="Unknown metadata tag"):
+        WatchRule.create(root=root, metadata={"nope": "x"})
+    with pytest.raises(ValueError, match="metadata"):
+        WatchRule.create(root=root, metadata={})
+
+
+def test_rule_store_add_remove_reload_and_atomic_yaml(tmp_path: Path) -> None:
+    """A store atomically persists rules and detects later replacements."""
+    from autometa.watch_store import RuleStore
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store_path = tmp_path / "watchers.yaml"
+    store = RuleStore(store_path)
+    rule = WatchRule.create(root=root, metadata={"year": "2024"})
+
+    store.add(rule)
+    assert store.load() == [rule]
+    assert "version: 2" in store_path.read_text()
+    assert store.changed() is False
+
+    replacement = WatchRule.create(root=root, metadata={"title": "New"})
+    RuleStore(store_path).add(replacement)
+    assert store.changed() is True
+    assert store.reload() == [rule, replacement]
+    assert store.remove(rule.id) is True
+    assert store.load() == [replacement]
+    assert store.remove(rule.id) is False
+
+
+def test_rule_store_rejects_duplicate_ids_and_safe_concurrent_updates(
+    tmp_path: Path,
+) -> None:
+    """Store validation catches duplicate IDs and locking preserves all adds."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from autometa.watch_store import RuleStore
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store_path = tmp_path / "watchers.yaml"
+    fixed = WatchRule.create(
+        root=root,
+        metadata={"year": "2024"},
+        id="12345678-1234-4567-8123-123456789abc",
+    )
+    store = RuleStore(store_path)
+    store.add(fixed)
+    with pytest.raises(ValueError, match="Duplicate"):
+        store.add(fixed)
+
+    def add_one(index: int) -> None:
+        RuleStore(store_path).add(
+            WatchRule.create(root=root, metadata={"title": str(index)})
         )
 
-    def test_liveness_lock_path_is_colocated(self):
-        self.assertEqual(
-            liveness_lock_path(self.store, 1), self.store.with_name("1.lock")
-        )
-
-    def test_is_running_when_lock_free(self):
-        self._seed()
-        self.assertEqual(is_watch_running(self.store, 1), (False, None))
-
-    def test_acquire_then_is_running(self):
-        self._seed()
-        with acquire_liveness_lock(self.store, 1) as lock:
-            lock.seek(0)
-            lock.truncate()
-            lock.write(b"1234")
-            lock.flush()
-            self.assertEqual(is_watch_running(self.store, 1), (True, 1234))
-
-    def test_second_acquirer_nonblocking_raises(self):
-        self._seed()
-        with acquire_liveness_lock(self.store, 1):
-            with self.assertRaises(BlockingIOError):
-                with acquire_liveness_lock(self.store, 1, blocking=False):
-                    pass
-
-    def test_lock_released_on_close(self):
-        self._seed()
-        with acquire_liveness_lock(self.store, 1):
-            pass
-        # After the with-block exits, the lock must be free
-        self.assertEqual(is_watch_running(self.store, 1), (False, None))
-
-    def test_missing_lock_file_returns_not_running(self):
-        # No seed -> no lock file exists
-        self.assertEqual(is_watch_running(self.store, 99), (False, None))
-
-
-if __name__ == "__main__":
-    unittest.main()
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        list(workers.map(add_one, range(8)))
+    assert len(RuleStore(store_path).load()) == 9

@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-autometa = "autometa.cli:main"
+autometa = "autometa.cli:console_main"
 
 [dependency-groups]
 dev = [
