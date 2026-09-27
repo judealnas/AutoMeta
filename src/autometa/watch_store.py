@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
+from typing import Callable
 import uuid
 
 import yaml
@@ -111,8 +112,8 @@ class WatchRule:
         return cls(
             str(uuid.UUID(id)) if id else str(uuid.uuid4()),
             str(resolved),
-            list(include or ["*"]),
-            list(exclude or []),
+            ["*"] if include is None else list(include),
+            [] if exclude is None else list(exclude),
             recursive,
             cleaned,
         )
@@ -305,6 +306,30 @@ class RuleStore:
             if any(item.id == rule.id for item in rules):
                 raise ValueError(f"Duplicate watch rule ID: {rule.id}")
             self._save_unlocked([*rules, rule])
+
+    def update(self, rule_id: str, transform: Callable[[WatchRule], WatchRule]) -> bool:
+        """Atomically replace one existing rule using its current stored value.
+
+        The transform runs while the store's read-modify-write lock is held, so
+        concurrent CLI changes cannot overwrite unrelated fields from a stale
+        snapshot.
+
+        :param rule_id: UUID of the rule to replace.
+        :param transform: Function that creates the validated replacement rule.
+        :return: Whether an existing rule was updated.
+        :raises ValueError: If the replacement changes the rule ID.
+        """
+        with self._locked():
+            rules = self._load_unlocked()
+            for index, existing in enumerate(rules):
+                if existing.id != rule_id:
+                    continue
+                replacement = transform(existing)
+                if replacement.id != rule_id:
+                    raise ValueError("Updated watch rule ID must not change.")
+                self._save_unlocked([*rules[:index], replacement, *rules[index + 1 :]])
+                return True
+            return False
 
     def remove(self, rule_id: str) -> bool:
         """Atomically delete a rule.

@@ -129,8 +129,17 @@ keep `autometa watch run` running and restart it after failures.
 autometa watch add /music --include "*.mp3" --include "*.flac" \
   --exclude "*.part" --recursive --artist="Alice,Bob" --year=2024
 
-# Inspect or remove stored rules.
+# Inspect, update, or remove stored rules. The YAML store is managed by the CLI;
+# do not edit it manually.
 autometa watch list
+autometa watch update <uuid> --year 2025
+
+# Repeated include/exclude flags replace that complete list. Omitted fields remain.
+autometa watch update <uuid> --include "*.flac" --include "*.ogg"
+autometa watch update <uuid> --clear-exclude
+
+# Clear includes explicitly to disable matching until they are replaced later.
+autometa watch update <uuid> --clear-include
 autometa watch remove <uuid>
 
 # Start the single foreground reconciliation service.

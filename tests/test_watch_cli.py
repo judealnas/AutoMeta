@@ -41,6 +41,88 @@ def test_watch_add_list_and_remove_return_statuses(tmp_path: Path, capsys) -> No
         assert main(["watch", "remove", rule_id]) == 1
 
 
+def test_watch_update_replaces_supplied_fields_and_preserves_others(
+    tmp_path: Path,
+) -> None:
+    """Update replaces supplied values and clears lists only on explicit flags."""
+    root = tmp_path / "music"
+    replacement_root = tmp_path / "replacement"
+    root.mkdir()
+    replacement_root.mkdir()
+    store = tmp_path / "watchers.yaml"
+
+    with patch.dict(os.environ, {ENV_STORE_PATH: str(store)}):
+        assert (
+            main(
+                [
+                    "watch",
+                    "add",
+                    str(root),
+                    "--include",
+                    "*.mp3",
+                    "--include",
+                    "*.flac",
+                    "--exclude",
+                    "*.part",
+                    "--recursive",
+                    "--artist",
+                    "Alice,Bob",
+                    "--year",
+                    "2024",
+                ]
+            )
+            == 0
+        )
+        rule_id = RuleStore(store).load()[0].id
+
+        # Scalars and supplied pattern lists replace; omitted fields survive.
+        assert (
+            main(
+                [
+                    "watch",
+                    "update",
+                    rule_id,
+                    "--root",
+                    str(replacement_root),
+                    "--include",
+                    "*.ogg",
+                    "--year",
+                    "2025",
+                    "--no-recursive",
+                ]
+            )
+            == 0
+        )
+        rule = RuleStore(store).load()[0]
+        assert rule.root == str(replacement_root.resolve())
+        assert rule.include == ["*.ogg"]
+        assert rule.exclude == ["*.part"]
+        assert rule.recursive is False
+        assert rule.metadata == {"artist": ["Alice", "Bob"], "year": "2025"}
+
+        # Empty lists require explicit clear flags.
+        assert (
+            main(["watch", "update", rule_id, "--clear-include", "--clear-exclude"])
+            == 0
+        )
+        rule = RuleStore(store).load()[0]
+        assert rule.include == []
+        assert rule.exclude == []
+
+
+def test_watch_update_rejects_conflicting_list_options(tmp_path: Path) -> None:
+    """Clear and replacement flags for a list cannot be combined."""
+    with patch.dict(os.environ, {ENV_STORE_PATH: str(tmp_path / "store.yaml")}):
+        assert (
+            main(["watch", "update", "id", "--include", "*.mp3", "--clear-include"])
+            == 2
+        )
+        assert (
+            main(["watch", "update", "id", "--exclude", "*.part", "--clear-exclude"])
+            == 2
+        )
+
+
 def test_watch_cli_rejects_invalid_command_with_nonzero_exit(tmp_path: Path) -> None:
     """Invalid watch invocation maps parser failure to a return code."""
     with patch.dict(os.environ, {ENV_STORE_PATH: str(tmp_path / "store.yaml")}):

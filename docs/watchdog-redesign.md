@@ -16,6 +16,7 @@ autometa watch add /music \
   --year 2024
 
 autometa watch list
+autometa watch update <id> --year 2025
 autometa watch remove <id>
 autometa watch run
 ```

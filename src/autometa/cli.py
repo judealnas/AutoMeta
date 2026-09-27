@@ -81,6 +81,56 @@ WATCH_REMOVE = WATCH_SUBPARSERS.add_parser(
     "remove", help="Remove a configured watch rule."
 )
 WATCH_REMOVE.add_argument("id", help="Watch rule UUID.")
+WATCH_UPDATE = WATCH_SUBPARSERS.add_parser(
+    "update", help="Update one configured watch rule."
+)
+WATCH_UPDATE.add_argument("id", help="Watch rule UUID.")
+WATCH_UPDATE.add_argument(
+    "--root", type=Path, help="Replacement existing root directory."
+)
+WATCH_UPDATE_INCLUDE = WATCH_UPDATE.add_mutually_exclusive_group()
+WATCH_UPDATE_INCLUDE.add_argument(
+    "--include",
+    action="append",
+    default=None,
+    metavar="PATTERN",
+    help="Replace include patterns; repeatable.",
+)
+WATCH_UPDATE_INCLUDE.add_argument(
+    "--clear-include",
+    action="store_true",
+    help="Clear include patterns, disabling matches until patterns are added.",
+)
+WATCH_UPDATE_EXCLUDE = WATCH_UPDATE.add_mutually_exclusive_group()
+WATCH_UPDATE_EXCLUDE.add_argument(
+    "--exclude",
+    action="append",
+    default=None,
+    metavar="PATTERN",
+    help="Replace exclude patterns; repeatable.",
+)
+WATCH_UPDATE_EXCLUDE.add_argument(
+    "--clear-exclude",
+    action="store_true",
+    help="Clear all exclude patterns.",
+)
+WATCH_UPDATE_RECURSIVE = WATCH_UPDATE.add_mutually_exclusive_group()
+WATCH_UPDATE_RECURSIVE.add_argument(
+    "--recursive",
+    dest="recursive",
+    action="store_const",
+    const=True,
+    default=None,
+    help="Watch descendant directories.",
+)
+WATCH_UPDATE_RECURSIVE.add_argument(
+    "--no-recursive",
+    dest="recursive",
+    action="store_const",
+    const=False,
+    help="Watch only direct children of the root.",
+)
+add_metadata_arguments(WATCH_UPDATE, include_append_artists=False)
 WATCH_SUBPARSERS.add_parser("run", help="Run all rules in the foreground.")
 
 
@@ -95,6 +145,43 @@ def _collect_metadata(args: argparse.Namespace) -> dict[Tags, str | list[str] | 
         for tag in Tags
         if (value := getattr(args, tag.lower(), None)) is not None
     }
+
+
+def _updated_rule_from_args(args: argparse.Namespace, existing: WatchRule) -> WatchRule:
+    """Create a validated replacement rule from supplied update options.
+
+    Omitted options retain the corresponding stored value. Supplied metadata
+    tags replace only those tags; repeatable include/exclude flags replace the
+    entire respective list.
+
+    :param args: Parsed ``watch update`` options.
+    :param existing: Current stored rule.
+    :return: Validated replacement with the existing rule ID.
+    """
+    metadata = dict(existing.metadata)
+    metadata.update(normalize_metadata(_collect_metadata(args)))
+    include = (
+        []
+        if args.clear_include
+        else args.include
+        if args.include is not None
+        else existing.include
+    )
+    exclude = (
+        []
+        if args.clear_exclude
+        else args.exclude
+        if args.exclude is not None
+        else existing.exclude
+    )
+    return WatchRule.create(
+        id=existing.id,
+        root=args.root if args.root is not None else Path(existing.root),
+        include=include,
+        exclude=exclude,
+        recursive=existing.recursive if args.recursive is None else args.recursive,
+        metadata=metadata,
+    )
 
 
 def _handle_watch(argv: list[str]) -> int:
@@ -131,6 +218,13 @@ def _handle_watch(argv: list[str]) -> int:
                     f"{rule.id}\t{rule.root}\t{','.join(rule.include)}\t{rule.metadata}"
                 )
             return 0
+        if args.action == "update":
+            if store.update(
+                args.id, lambda existing: _updated_rule_from_args(args, existing)
+            ):
+                return 0
+            print(f"Watch rule not found: {args.id}", file=sys.stderr)
+            return 1
         if args.action == "remove":
             if store.remove(args.id):
                 return 0
