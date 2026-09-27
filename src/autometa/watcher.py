@@ -122,7 +122,7 @@ class FileStabilityProbe:
     def __init__(self, settle_seconds: float = 0.5) -> None:
         """Initialize a file stability probe.
 
-        :param settle_seconds: Minimum delay between stable observations.
+        :param settle_seconds: How long the file must remain unchanged to pass.
         """
         self.settle_seconds = settle_seconds
         self._seen: dict[Path, tuple[int, int, float]] = {}
@@ -130,8 +130,13 @@ class FileStabilityProbe:
     def ready(self, path: Path) -> bool:
         """Report whether the current file state has settled.
 
+        Records the first observation of each size/mtime state and only reports
+        ready once that state has persisted unchanged for ``settle_seconds``.
+        Probing an already-stable file repeatedly therefore converges instead of
+        restarting the settle window on every call.
+
         :param path: Existing file to inspect.
-        :return: Whether two observations are unchanged and sufficiently apart.
+        :return: Whether the file has been unchanged for the settle period.
         """
         try:
             stat = path.stat()
@@ -139,14 +144,13 @@ class FileStabilityProbe:
             return False
         key = path.resolve()
         state = (stat.st_size, stat.st_mtime_ns)
-        previous = self._seen.get(key)
         now = time.monotonic()
-        self._seen[key] = (*state, now)
-        return (
-            previous is not None
-            and previous[:2] == state
-            and now - previous[2] >= self.settle_seconds
-        )
+        previous = self._seen.get(key)
+        # A changed state (or a fresh file) starts a new settle window.
+        if previous is None or previous[:2] != state:
+            self._seen[key] = (*state, now)
+            return False
+        return now - previous[2] >= self.settle_seconds
 
 
 class MetadataReconciler:
@@ -322,6 +326,21 @@ class WatchService:
             LOGGER.error("Another autometa watch service is already running.")
             return 1
         try:
+            # Install graceful signal handlers only in the main thread, where
+            # signal.signal is supported. Signal handlers only trip the shutdown
+            # event; all teardown happens in normal control flow below.
+            if threading.current_thread() is threading.main_thread():
+                current = {
+                    signum: signal.getsignal(signum)
+                    for signum in (signal.SIGTERM, signal.SIGINT)
+                }
+                signal.signal(signal.SIGTERM, self.request_shutdown)
+                signal.signal(signal.SIGINT, self.request_shutdown)
+            else:
+                current = {}
+        except (ValueError, TypeError):
+            current = {}
+        try:
             self._rules = self.store.load()
             self._schedule()
             self._initial_scan()
@@ -348,6 +367,8 @@ class WatchService:
             LOGGER.exception("Watch service failed")
             return 1
         finally:
+            for signum, old in current.items():
+                signal.signal(signum, old)
             if self._observer is not None:
                 with contextlib.suppress(Exception):
                     self._observer.stop()

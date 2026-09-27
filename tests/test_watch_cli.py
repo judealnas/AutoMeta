@@ -53,3 +53,49 @@ def test_watch_run_returns_service_exit_code(tmp_path: Path) -> None:
     with patch("autometa.cli.WatchService.run", return_value=7):
         with patch.dict(os.environ, {ENV_STORE_PATH: str(tmp_path / "store.yaml")}):
             assert main(["watch", "run"]) == 7
+
+
+def test_watch_run_service_terminates_cleanly_on_sigterm(tmp_path: Path) -> None:
+    """SIGTERM to a running ``watch run`` service yields a clean zero exit.
+
+    The service's shutdown signal handler must be registered, otherwise the
+    process is killed by SIGTERM with status 143 instead of exiting gracefully.
+    """
+    import signal
+    import subprocess
+    import time
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store = tmp_path / "watchers.yaml"
+    with patch.dict(os.environ, {ENV_STORE_PATH: str(store)}):
+        assert (
+            main(["watch", "add", str(root), "--include", "*.mp3", "--year", "2024"])
+            == 0
+        )
+
+    env = dict(os.environ, AUTOMETA_WATCH_STORE=str(store), PYTHONPATH=str(tmp_path))
+    proc = subprocess.Popen(
+        ["uv", "run", "autometa", "watch", "run"],
+        env=env,
+        cwd=Path.cwd(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        # Give the service a moment to acquire its lock and start observing.
+        time.sleep(1.5)
+        assert proc.poll() is None, f"service exited early: {proc.stderr.read()}"
+        os.kill(proc.pid, signal.SIGTERM)
+        try:
+            code = proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise AssertionError("service hung on SIGTERM (handler not registered)")
+        assert code == 0, f"expected clean exit 0, got {code}"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

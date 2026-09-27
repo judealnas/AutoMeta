@@ -100,6 +100,9 @@ def _collect_metadata(args: argparse.Namespace) -> dict[Tags, str | list[str] | 
 def _handle_watch(argv: list[str]) -> int:
     """Dispatch declarative watch CLI commands and convert usage errors to status.
 
+    The watch service runs in the foreground and must make its diagnostics
+    visible on stderr for a supervising service manager.
+
     :param argv: Arguments following ``watch``.
     :return: Process exit status.
     """
@@ -107,6 +110,7 @@ def _handle_watch(argv: list[str]) -> int:
         args = WATCH_PARSER.parse_args(argv)
     except SystemExit as exc:
         return int(exc.code)
+    setup_logging(1)
     store = RuleStore(get_watch_store_path())
     try:
         if args.action == "add":

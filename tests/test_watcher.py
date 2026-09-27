@@ -79,6 +79,28 @@ def test_stability_probe_requires_two_unchanged_observations(tmp_path: Path) -> 
     assert probe.ready(path) is False
 
 
+def test_stability_probe_converges_for_unchanged_file(tmp_path: Path) -> None:
+    """An unmodified file probed repeatedly within the settle window becomes ready.
+
+    Regression: repeated probes were re-baselining the observation timestamp every
+    call, so with the default 0.5s settle and a faster debounce cycle, ``ready()``
+    never returned True and files were requeued forever.
+    """
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"stable content")
+    probe = FileStabilityProbe(settle_seconds=0.5)
+
+    # Probe on a loop matching the worker reshape cycle; the file stays identical.
+    ready = False
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and not ready:
+        ready = probe.ready(path)
+        if not ready:
+            time.sleep(0.1)
+
+    assert ready is True
+
+
 def test_reconciler_is_idempotent_and_isolates_malformed_file(tmp_path: Path) -> None:
     """A reconciliation saves once and never lets media exceptions escape."""
 
