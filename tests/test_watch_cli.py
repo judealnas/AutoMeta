@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from autometa.cli import main
 from autometa.watch_store import ENV_STORE_PATH, RuleStore
 
@@ -181,6 +183,8 @@ def test_watch_run_service_terminates_cleanly_on_sigterm(tmp_path: Path) -> None
     The service's shutdown signal handler must be registered, otherwise the
     process is killed by SIGTERM with status 143 instead of exiting gracefully.
     """
+    if os.name == "nt":
+        pytest.skip("Windows does not provide POSIX SIGTERM process semantics.")
     import signal
     import subprocess
     import time

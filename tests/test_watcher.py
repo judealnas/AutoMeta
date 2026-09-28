@@ -9,6 +9,7 @@ from watchdog.events import (
     FileModifiedEvent,
     FileMovedEvent,
 )
+from watchdog.observers import Observer
 
 from autometa.watch_store import WatchRule
 from autometa.watcher import (
@@ -33,8 +34,8 @@ def test_auto_observer_polls_wsl_mounted_windows_roots() -> None:
     assert (
         select_observer_factory(
             [Path("/home/jude/music")], observer_mode="auto", is_wsl=True
-        ).__name__
-        == "InotifyObserver"
+        )
+        is Observer
     )
 
 
@@ -368,6 +369,33 @@ def test_service_shutdown_deadline_does_not_wait_for_blocked_worker(
     finally:
         reconciler.release.set()
         thread.join(timeout=2)
+
+
+def test_windows_service_lock_releases_the_same_byte_range(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Windows singleton release unlocks the exact byte range it acquired."""
+    import os
+    import sys
+    import types
+
+    from autometa.watcher import acquire_service_lock
+
+    operations: list[tuple[int, int]] = []
+    fake_msvcrt = types.SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2)
+
+    def locking(descriptor: int, mode: int, size: int) -> None:
+        """Record the offset used by a simulated ``msvcrt.locking`` call."""
+        operations.append((mode, os.lseek(descriptor, 0, os.SEEK_CUR)))
+
+    fake_msvcrt.locking = locking
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setitem(sys.modules, "os", types.SimpleNamespace(name="nt"))
+
+    with acquire_service_lock(tmp_path / "watchers.yaml"):
+        pass
+
+    assert operations == [(fake_msvcrt.LK_NBLCK, 0), (fake_msvcrt.LK_UNLCK, 0)]
 
 
 def test_service_reports_observer_death_and_singleton_failure(tmp_path: Path) -> None:
