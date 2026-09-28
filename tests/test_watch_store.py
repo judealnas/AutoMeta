@@ -63,6 +63,35 @@ def test_rule_store_migrates_recursive_v2_patterns_to_path_globs(
     assert not hasattr(rules[0], "recursive")
 
 
+def test_windows_store_lock_releases_the_same_byte_range(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Windows lock release uses the exact byte range acquired for the store lock."""
+    import os
+    import sys
+    import types
+
+    from autometa import watch_store
+    from autometa.watch_store import RuleStore
+
+    operations: list[tuple[int, int]] = []
+    fake_msvcrt = types.SimpleNamespace(LK_LOCK=1, LK_UNLCK=2)
+
+    def locking(descriptor: int, mode: int, size: int) -> None:
+        """Record the offset used by a simulated ``msvcrt.locking`` call."""
+        operations.append((mode, os.lseek(descriptor, 0, os.SEEK_CUR)))
+
+    fake_msvcrt.locking = locking
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(watch_store, "_is_windows", lambda: True)
+    store = RuleStore(tmp_path / "watchers.yaml")
+
+    with store._locked():
+        pass
+
+    assert operations == [(fake_msvcrt.LK_LOCK, 0), (fake_msvcrt.LK_UNLCK, 0)]
+
+
 def test_rule_store_add_remove_reload_and_atomic_yaml(
     tmp_path: Path, monkeypatch
 ) -> None:

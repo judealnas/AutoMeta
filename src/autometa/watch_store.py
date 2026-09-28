@@ -17,6 +17,14 @@ from autometa.tags import Tags
 ENV_STORE_PATH = "AUTOMETA_WATCH_STORE"
 
 
+def _is_windows() -> bool:
+    """Return whether the current runtime uses Windows locking semantics.
+
+    :return: Whether the current operating system is Windows.
+    """
+    return os.name == "nt"
+
+
 def get_watch_store_path() -> Path:
     """Return the configured platform-appropriate watch store path.
 
@@ -207,12 +215,13 @@ class RuleStore:
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.lock_path, "a+b") as handle:
-            if os.name == "nt":
+            if _is_windows():
                 import msvcrt
 
                 handle.seek(0)
                 handle.write(b"0")
                 handle.flush()
+                handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
             else:
                 import fcntl
@@ -221,7 +230,7 @@ class RuleStore:
             try:
                 yield
             finally:
-                if os.name == "nt":
+                if _is_windows():
                     import msvcrt
 
                     handle.seek(0)
