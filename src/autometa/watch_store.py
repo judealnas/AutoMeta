@@ -66,6 +66,7 @@ class WatchRule:
     include: list[str]
     exclude: list[str]
     recursive: bool
+    priority: int
     metadata: dict[str, str | list[str]]
 
     @classmethod
@@ -77,6 +78,7 @@ class WatchRule:
         include: list[str] | None = None,
         exclude: list[str] | None = None,
         recursive: bool = False,
+        priority: int = 0,
         id: str | None = None,
     ) -> "WatchRule":
         """Create a fully validated rule.
@@ -86,6 +88,7 @@ class WatchRule:
         :param include: Filename include patterns.
         :param exclude: Filename exclusion patterns.
         :param recursive: Whether descendants are watched.
+        :param priority: Precedence for conflicting metadata tags.
         :param id: UUID string, generated when omitted.
         :return: Validated watch rule.
         :raises ValueError: If a field is invalid.
@@ -95,6 +98,8 @@ class WatchRule:
             raise ValueError(f"Watch root must be an existing directory: {root}")
         if not metadata:
             raise ValueError("Watch rule metadata must not be empty.")
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            raise ValueError("Watch rule priority must be an integer.")
         cleaned: dict[str, str | list[str]] = {}
         for key, value in metadata.items():
             try:
@@ -115,6 +120,7 @@ class WatchRule:
             ["*"] if include is None else list(include),
             [] if exclude is None else list(exclude),
             recursive,
+            priority,
             cleaned,
         )
 
@@ -129,6 +135,7 @@ class WatchRule:
             "include": self.include,
             "exclude": self.exclude,
             "recursive": self.recursive,
+            "priority": self.priority,
             "metadata": self.metadata,
         }
 
@@ -149,6 +156,7 @@ class WatchRule:
             include=[str(item) for item in value.get("include", ["*"])],
             exclude=[str(item) for item in value.get("exclude", [])],
             recursive=bool(value.get("recursive", False)),
+            priority=value.get("priority", 0),
             metadata={str(key): item for key, item in metadata.items()},
         )
 

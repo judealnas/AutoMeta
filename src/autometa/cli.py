@@ -75,6 +75,12 @@ WATCH_ADD.add_argument(
 WATCH_ADD.add_argument(
     "--recursive", action="store_true", help="Watch descendant directories."
 )
+WATCH_ADD.add_argument(
+    "--priority",
+    type=int,
+    default=0,
+    help="Metadata precedence when rules overlap (default: 0).",
+)
 add_metadata_arguments(WATCH_ADD, include_append_artists=False)
 WATCH_SUBPARSERS.add_parser("list", help="List configured watch rules.")
 WATCH_REMOVE = WATCH_SUBPARSERS.add_parser(
@@ -87,6 +93,9 @@ WATCH_UPDATE = WATCH_SUBPARSERS.add_parser(
 WATCH_UPDATE.add_argument("id", help="Watch rule UUID.")
 WATCH_UPDATE.add_argument(
     "--root", type=Path, help="Replacement existing root directory."
+)
+WATCH_UPDATE.add_argument(
+    "--priority", type=int, default=None, help="Replacement metadata precedence."
 )
 WATCH_UPDATE_INCLUDE = WATCH_UPDATE.add_mutually_exclusive_group()
 WATCH_UPDATE_INCLUDE.add_argument(
@@ -180,6 +189,7 @@ def _updated_rule_from_args(args: argparse.Namespace, existing: WatchRule) -> Wa
         include=include,
         exclude=exclude,
         recursive=existing.recursive if args.recursive is None else args.recursive,
+        priority=existing.priority if args.priority is None else args.priority,
         metadata=metadata,
     )
 
@@ -207,6 +217,7 @@ def _handle_watch(argv: list[str]) -> int:
                 include=args.include or ["*"],
                 exclude=args.exclude,
                 recursive=args.recursive,
+                priority=args.priority,
                 metadata=metadata,
             )
             store.add(rule)
@@ -215,7 +226,8 @@ def _handle_watch(argv: list[str]) -> int:
         if args.action == "list":
             for rule in store.load():
                 print(
-                    f"{rule.id}\t{rule.root}\t{','.join(rule.include)}\t{rule.metadata}"
+                    f"{rule.id}\t{rule.root}\tpriority={rule.priority}\t"
+                    f"{','.join(rule.include)}\t{rule.metadata}"
                 )
             return 0
         if args.action == "update":

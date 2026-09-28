@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatch
 import contextlib
+from dataclasses import dataclass
 import logging
 from pathlib import Path
 import queue
@@ -62,6 +63,75 @@ class PathMatcher:
         return any(
             matches_pattern(pattern) for pattern in self.rule.include
         ) and not any(matches_pattern(pattern) for pattern in self.rule.exclude)
+
+
+@dataclass(frozen=True)
+class EffectiveRule:
+    """Merged desired metadata for a path after rule precedence is resolved."""
+
+    id: str
+    metadata: dict[str, str | list[str]]
+
+
+@dataclass(frozen=True)
+class RuleConflict:
+    """Same-priority, incompatible metadata assignments for one tag."""
+
+    tag: str
+    priority: int
+    rule_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RuleResolution:
+    """The effective metadata rule or conflicts blocking reconciliation."""
+
+    rule: EffectiveRule | None
+    conflicts: tuple[RuleConflict, ...]
+
+
+def resolve_effective_rule(path: Path, rules: Iterable[WatchRule]) -> RuleResolution:
+    """Merge matching rules by priority into one metadata mapping.
+
+    Higher-priority assignments replace lower-priority assignments for the same
+    tag. Different values at the highest shared priority are conflicts, so the
+    caller must skip the path rather than choosing an arbitrary writer.
+
+    :param path: Candidate media file.
+    :param rules: Configured watch rules to evaluate.
+    :return: Effective rule or the conflicts that prevent reconciliation.
+    """
+    selected: dict[str, tuple[int, str | list[str], set[str]]] = {}
+    conflicts: dict[str, RuleConflict] = {}
+    for rule in rules:
+        if not PathMatcher(rule).matches(path):
+            continue
+        for tag, value in rule.metadata.items():
+            existing = selected.get(tag)
+            if existing is None or rule.priority > existing[0]:
+                selected[tag] = (rule.priority, value, {rule.id})
+                conflicts.pop(tag, None)
+            elif rule.priority == existing[0]:
+                if value == existing[1]:
+                    existing[2].add(rule.id)
+                else:
+                    existing[2].add(rule.id)
+                    conflicts[tag] = RuleConflict(
+                        tag=tag,
+                        priority=rule.priority,
+                        rule_ids=tuple(sorted(existing[2])),
+                    )
+    if conflicts:
+        return RuleResolution(None, tuple(conflicts.values()))
+    if not selected:
+        return RuleResolution(None, ())
+    metadata = {tag: value for tag, (_, value, _) in selected.items()}
+    rule_ids = sorted(
+        rule_id for _, _, matching_ids in selected.values() for rule_id in matching_ids
+    )
+    return RuleResolution(
+        EffectiveRule(",".join(dict.fromkeys(rule_ids)), metadata), ()
+    )
 
 
 class EventNormalizer:
@@ -177,7 +247,7 @@ class MetadataReconciler:
         """
         self.music_file_factory = music_file_factory
 
-    def reconcile(self, path: Path, rule: WatchRule) -> bool:
+    def reconcile(self, path: Path, rule: WatchRule | EffectiveRule) -> bool:
         """Update only mismatched metadata and contain all per-file failures.
 
         :param path: File path to reconcile.
@@ -378,7 +448,7 @@ class WatchService:
                     self.queue.put(path)
 
     def _process(self, path: Path) -> None:
-        """Reconcile every matching rule for a settled path.
+        """Reconcile the effective metadata target for a settled path.
 
         :param path: Candidate file path.
         """
@@ -389,9 +459,20 @@ class WatchService:
                     self.queue.put(path)
                 return
             settled = True
-            for rule in self._rules:
-                if PathMatcher(rule).matches(path):
-                    self.reconciler.reconcile(path, rule)
+            resolution = resolve_effective_rule(path, self._rules)
+            if resolution.conflicts:
+                for conflict in resolution.conflicts:
+                    LOGGER.error(
+                        "Conflicting watch rules for %s: tag %s has incompatible "
+                        "values at priority %s (rules: %s); skipping file.",
+                        path,
+                        conflict.tag,
+                        conflict.priority,
+                        ", ".join(conflict.rule_ids),
+                    )
+                return
+            if resolution.rule is not None:
+                self.reconciler.reconcile(path, resolution.rule)
         except Exception:
             LOGGER.exception("Unexpected worker failure for %s", path)
         finally:

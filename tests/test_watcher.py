@@ -17,6 +17,7 @@ from autometa.watcher import (
     FileStabilityProbe,
     MetadataReconciler,
     PathMatcher,
+    resolve_effective_rule,
 )
 
 
@@ -40,6 +41,51 @@ def test_matcher_matches_basenames_at_nested_depth_and_excludes_win(
     assert matcher.matches(nested)
     assert not matcher.matches(root / "album" / "skip-track.mp3")
     assert not matcher.matches(root / "album" / "track.part")
+
+
+def test_effective_rule_merges_metadata_and_prefers_higher_priority(
+    tmp_path: Path,
+) -> None:
+    """Matching rules merge tags while higher priority overrides one tag."""
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "live" / "track.mp3"
+    path.parent.mkdir()
+    path.touch()
+    base = WatchRule.create(
+        root=root,
+        recursive=True,
+        priority=0,
+        metadata={"artist": "Alice", "genre": "Classical"},
+    )
+    override = WatchRule.create(
+        root=root / "live",
+        priority=100,
+        metadata={"genre": "Live"},
+    )
+
+    resolution = resolve_effective_rule(path, [base, override])
+
+    assert resolution.conflicts == ()
+    assert resolution.rule is not None
+    assert resolution.rule.metadata == {"artist": "Alice", "genre": "Live"}
+
+
+def test_effective_rule_rejects_same_priority_conflicts(tmp_path: Path) -> None:
+    """Contradictory top-priority assignments skip reconciliation safely."""
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "track.mp3"
+    path.touch()
+    jazz = WatchRule.create(root=root, priority=10, metadata={"genre": "Jazz"})
+    rock = WatchRule.create(root=root, priority=10, metadata={"genre": "Rock"})
+
+    resolution = resolve_effective_rule(path, [jazz, rock])
+
+    assert resolution.rule is None
+    assert len(resolution.conflicts) == 1
+    assert resolution.conflicts[0].tag == "genre"
+    assert set(resolution.conflicts[0].rule_ids) == {jazz.id, rock.id}
 
 
 def test_normalizer_uses_move_destination_and_ignores_directories(

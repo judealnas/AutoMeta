@@ -41,6 +41,22 @@ def test_watch_add_list_and_remove_return_statuses(tmp_path: Path, capsys) -> No
         assert main(["watch", "remove", rule_id]) == 1
 
 
+def test_watch_priority_is_persisted_and_updated(tmp_path: Path) -> None:
+    """Priority defaults to zero and can be changed without replacing metadata."""
+    root = tmp_path / "music"
+    root.mkdir()
+    store = tmp_path / "watchers.yaml"
+
+    with patch.dict(os.environ, {ENV_STORE_PATH: str(store)}):
+        assert main(["watch", "add", str(root), "--year", "2024"]) == 0
+        rule = RuleStore(store).load()[0]
+        assert rule.priority == 0
+        assert main(["watch", "update", rule.id, "--priority", "100"]) == 0
+        rule = RuleStore(store).load()[0]
+        assert rule.priority == 100
+        assert rule.metadata == {"year": "2024"}
+
+
 def test_watch_update_replaces_supplied_fields_and_preserves_others(
     tmp_path: Path,
 ) -> None:

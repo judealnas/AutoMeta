@@ -17,6 +17,8 @@ autometa watch add /music \
 
 autometa watch list
 autometa watch update <id> --year 2025
+# A scoped override wins per tag over a broad default.
+autometa watch update <id> --priority 100
 autometa watch remove <id>
 autometa watch run
 ```
@@ -117,6 +119,7 @@ these separately:
 id: 8b5e...
 root: /music
 recursive: true
+priority: 0
 include:
   - "*.mp3"
   - "*.flac"
@@ -142,7 +145,18 @@ Configuration validation would reject:
 - Unsupported pattern syntax
 - Duplicate rule IDs
 
-### 6. Declarative, atomic configuration
+### 6. Rule overlap and precedence
+
+Rules may overlap. For a matching file, the service first computes one effective
+metadata mapping and then reconciles it once. Values for different tags merge;
+for the same tag, the highest numeric `priority` wins (default `0`).
+
+Equal-priority rules assigning the same value are compatible. Equal-priority
+rules assigning different values for the same tag are reported with their rule
+IDs, and the file is skipped without a write. This prevents self-generated
+filesystem events from making rules overwrite each other indefinitely.
+
+### 7. Declarative, atomic configuration
 
 YAML can remain the configuration format, but writes should be safe:
 
@@ -159,7 +173,7 @@ remove, or replace schedules.
 SQLite would be reasonable if editing, audit history, or many concurrent
 clients became requirements, but it is unnecessary for the initial design.
 
-### 7. Health and failure behavior
+### 8. Health and failure behavior
 
 The service should exit nonzero if its observer dies. An external service
 manager can then restart it.
@@ -178,7 +192,7 @@ logged with the path, rule ID, attempt count, and exception.
 Logs would go to stderr in foreground mode so the service manager captures
 them. Nothing important would be redirected to `/dev/null`.
 
-### 8. Predictable shutdown
+### 9. Predictable shutdown
 
 On SIGINT or SIGTERM:
 

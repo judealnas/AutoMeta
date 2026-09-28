@@ -129,10 +129,18 @@ keep `autometa watch run` running and restart it after failures.
 autometa watch add /music --include "*.mp3" --include "*.flac" \
   --exclude "*.part" --recursive --artist="Alice,Bob" --year=2024
 
+# A broad default and a more-specific override. Higher priority wins per tag.
+autometa watch add /music --include "*.mp3" --recursive \
+  --priority 0 --genre "Classical"
+autometa watch add /music/live --include "*.mp3" \
+  --priority 100 --genre "Live"
+
 # Inspect, update, or remove stored rules. The YAML store is managed by the CLI;
 # do not edit it manually.
 autometa watch list
 autometa watch update <uuid> --year 2025
+# Priority is preserved when omitted; use it to make a scoped override win.
+autometa watch update <uuid> --priority 100
 
 # Repeated include/exclude flags replace that complete list. Omitted fields remain.
 autometa watch update <uuid> --include "*.flac" --include "*.ogg"
@@ -147,8 +155,12 @@ autometa watch run
 ```
 
 The YAML watch store contains rule IDs, roots, include/exclude patterns,
-recursive flags, and desired metadata only. Writes are locked and atomic. The
-service scans matching files at startup, coalesces filesystem event storms,
-waits for writes to settle, and reconciles tags idempotently. A malformed file
-is logged and retried without stopping the service; if an observer dies, the
-service exits nonzero so its supervisor can restart it.
+recursive flags, priorities, and desired metadata only. When a file matches
+multiple rules, disjoint metadata tags are merged and the highest priority wins
+for each shared tag. Equal-priority rules assigning different values to the same
+tag are reported as a conflict and that file is skipped; no arbitrary write is
+performed. Writes are locked and atomic. The service scans matching files at
+startup, coalesces filesystem event storms, waits for writes to settle, and
+reconciles tags idempotently. A malformed file is logged and retried without
+stopping the service; if an observer dies, the service exits nonzero so its
+supervisor can restart it.
