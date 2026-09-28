@@ -22,7 +22,6 @@ def test_watch_add_list_and_remove_return_statuses(tmp_path: Path, capsys) -> No
                     str(root),
                     "--include",
                     "*.mp3",
-                    "--recursive",
                     "--artist",
                     "Alice,Bob",
                     "--year",
@@ -80,7 +79,6 @@ def test_watch_update_replaces_supplied_fields_and_preserves_others(
                     "*.flac",
                     "--exclude",
                     "*.part",
-                    "--recursive",
                     "--artist",
                     "Alice,Bob",
                     "--year",
@@ -104,7 +102,6 @@ def test_watch_update_replaces_supplied_fields_and_preserves_others(
                     "*.ogg",
                     "--year",
                     "2025",
-                    "--no-recursive",
                 ]
             )
             == 0
@@ -113,7 +110,6 @@ def test_watch_update_replaces_supplied_fields_and_preserves_others(
         assert rule.root == str(replacement_root.resolve())
         assert rule.include == ["*.ogg"]
         assert rule.exclude == ["*.part"]
-        assert rule.recursive is False
         assert rule.metadata == {"artist": ["Alice", "Bob"], "year": "2025"}
 
         # Empty lists require explicit clear flags.

@@ -18,14 +18,12 @@ def test_watch_rule_validates_directory_and_known_nonempty_metadata(
         root=root,
         include=["*.mp3"],
         exclude=["*.part"],
-        recursive=True,
         metadata={"artist": ["Alice"], "year": "2024"},
     )
 
     assert rule.root == str(root.resolve())
     assert rule.include == ["*.mp3"]
     assert rule.exclude == ["*.part"]
-    assert rule.recursive is True
     assert rule.metadata == {"artist": ["Alice"], "year": "2024"}
     assert len(rule.id) == 36
 
@@ -35,6 +33,34 @@ def test_watch_rule_validates_directory_and_known_nonempty_metadata(
         WatchRule.create(root=root, metadata={"nope": "x"})
     with pytest.raises(ValueError, match="metadata"):
         WatchRule.create(root=root, metadata={})
+
+
+def test_rule_store_migrates_recursive_v2_patterns_to_path_globs(
+    tmp_path: Path,
+) -> None:
+    """Version-two basename rules load as equivalent version-three glob rules."""
+    from autometa.watch_store import RuleStore
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store_path = tmp_path / "watchers.yaml"
+    store_path.write_text(
+        "version: 2\n"
+        "rules:\n"
+        "  - id: 12345678-1234-4567-8123-123456789abc\n"
+        f"    root: {root}\n"
+        "    include: ['*.mp3']\n"
+        "    exclude: ['*.part']\n"
+        "    recursive: true\n"
+        "    priority: 0\n"
+        "    metadata: {year: '2024'}\n"
+    )
+
+    rules = RuleStore(store_path).load()
+
+    assert rules[0].include == ["**/*.mp3"]
+    assert rules[0].exclude == ["**/*.part"]
+    assert not hasattr(rules[0], "recursive")
 
 
 def test_rule_store_add_remove_reload_and_atomic_yaml(
@@ -58,7 +84,7 @@ def test_rule_store_add_remove_reload_and_atomic_yaml(
     store.add(rule)
     assert fsynced_directories == [store_path.parent]
     assert store.load() == [rule]
-    assert "version: 2" in store_path.read_text()
+    assert "version: 3" in store_path.read_text()
     assert store.changed() is False
 
     replacement = WatchRule.create(root=root, metadata={"title": "New"})

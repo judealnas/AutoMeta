@@ -17,6 +17,7 @@ from autometa.watcher import (
     FileStabilityProbe,
     MetadataReconciler,
     PathMatcher,
+    observation_roots,
     resolve_effective_rule,
     select_observer_factory,
 )
@@ -37,6 +38,32 @@ def test_auto_observer_polls_wsl_mounted_windows_roots() -> None:
     )
 
 
+def test_path_patterns_match_relative_directories_and_globstar(tmp_path: Path) -> None:
+    """Root-relative patterns distinguish direct project files from descendants."""
+    root = tmp_path / "Jude Tunes"
+    direct = root / "Alpha Project" / "song.mp3"
+    nested = root / "Alpha Project" / "album" / "song.mp3"
+    nested.parent.mkdir(parents=True)
+    direct.touch()
+    nested.touch()
+    direct_rule = WatchRule.create(
+        root=root,
+        include=["* Project/*.mp3"],
+        metadata={"year": "2026"},
+    )
+    recursive_rule = WatchRule.create(
+        root=root,
+        include=["* Project/**/*.mp3"],
+        metadata={"year": "2026"},
+    )
+
+    assert PathMatcher(direct_rule).matches(direct)
+    assert not PathMatcher(direct_rule).matches(nested)
+    assert PathMatcher(recursive_rule).matches(direct)
+    assert PathMatcher(recursive_rule).matches(nested)
+    assert observation_roots(recursive_rule) == [root]
+
+
 def test_matcher_matches_basenames_at_nested_depth_and_excludes_win(
     tmp_path: Path,
 ) -> None:
@@ -47,9 +74,8 @@ def test_matcher_matches_basenames_at_nested_depth_and_excludes_win(
     nested.touch()
     rule = WatchRule.create(
         root=root,
-        include=["*.mp3"],
-        exclude=["*.part", "skip*.mp3"],
-        recursive=True,
+        include=["**/*.mp3"],
+        exclude=["**/*.part", "**/skip*.mp3"],
         metadata={"year": "2024"},
     )
     matcher = PathMatcher(rule)
@@ -70,7 +96,7 @@ def test_effective_rule_merges_metadata_and_prefers_higher_priority(
     path.touch()
     base = WatchRule.create(
         root=root,
-        recursive=True,
+        include=["**/*.mp3"],
         priority=100,
         metadata={"artist": "Alice", "genre": "Classical"},
     )
@@ -98,7 +124,7 @@ def test_effective_rule_prefers_deeper_matching_root_at_same_priority(
     path.touch()
     broad = WatchRule.create(
         root=parent,
-        recursive=True,
+        include=["**/*.mp3"],
         metadata={"artist": "Broad Artist", "genre": "Jazz"},
     )
     scoped = WatchRule.create(

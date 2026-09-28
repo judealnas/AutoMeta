@@ -64,7 +64,7 @@ WATCH_ADD.add_argument(
     action="append",
     default=[],
     metavar="PATTERN",
-    help="Include filename pattern; repeatable.",
+    help="Root-relative '/'-separated path pattern; repeatable.",
 )
 WATCH_ADD.add_argument(
     "--exclude",
@@ -72,9 +72,6 @@ WATCH_ADD.add_argument(
     default=[],
     metavar="PATTERN",
     help="Exclude filename pattern; repeatable.",
-)
-WATCH_ADD.add_argument(
-    "--recursive", action="store_true", help="Watch descendant directories."
 )
 WATCH_ADD.add_argument(
     "--priority",
@@ -123,22 +120,6 @@ WATCH_UPDATE_EXCLUDE.add_argument(
     "--clear-exclude",
     action="store_true",
     help="Clear all exclude patterns.",
-)
-WATCH_UPDATE_RECURSIVE = WATCH_UPDATE.add_mutually_exclusive_group()
-WATCH_UPDATE_RECURSIVE.add_argument(
-    "--recursive",
-    dest="recursive",
-    action="store_const",
-    const=True,
-    default=None,
-    help="Watch descendant directories.",
-)
-WATCH_UPDATE_RECURSIVE.add_argument(
-    "--no-recursive",
-    dest="recursive",
-    action="store_const",
-    const=False,
-    help="Watch only direct children of the root.",
 )
 add_metadata_arguments(WATCH_UPDATE, include_append_artists=False)
 WATCH_RUN = WATCH_SUBPARSERS.add_parser("run", help="Run all rules in the foreground.")
@@ -203,7 +184,6 @@ def _updated_rule_from_args(args: argparse.Namespace, existing: WatchRule) -> Wa
         root=args.root if args.root is not None else Path(existing.root),
         include=include,
         exclude=exclude,
-        recursive=existing.recursive if args.recursive is None else args.recursive,
         priority=existing.priority if args.priority is None else args.priority,
         metadata=metadata,
     )
@@ -231,7 +211,6 @@ def _handle_watch(argv: list[str]) -> int:
                 root=args.root,
                 include=args.include or ["*"],
                 exclude=args.exclude,
-                recursive=args.recursive,
                 priority=args.priority,
                 metadata=metadata,
             )

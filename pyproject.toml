@@ -7,7 +7,7 @@ name = "autometa"
 version = "0.1.0"
 description = "Tool for updating metadata for audio files."
 authors = [{ name = "Jude Alnas" }]
-requires-python = ">=3.12,<3.14"
+requires-python = ">=3.13,<3.15"
 readme = "README.md"
 classifiers = [
     "Programming Language :: Python :: 3",

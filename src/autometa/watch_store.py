@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from pathlib import Path, PurePath
 import tempfile
 from typing import Callable
 import uuid
@@ -57,6 +57,28 @@ def normalize_metadata(
     return normalized
 
 
+def _normalize_path_patterns(
+    patterns: list[str] | None, *, default: list[str]
+) -> list[str]:
+    """Validate root-relative portable glob patterns.
+
+    :param patterns: Caller-supplied patterns or ``None`` for a default.
+    :param default: Patterns used when the caller omits the field.
+    :return: Validated slash-separated path patterns.
+    :raises ValueError: If a pattern is empty, absolute, escaping, or nonportable.
+    """
+    normalized = list(default if patterns is None else patterns)
+    for pattern in normalized:
+        if not isinstance(pattern, str) or not pattern:
+            raise ValueError("Watch path patterns must be nonempty strings.")
+        if "\\" in pattern:
+            raise ValueError("Watch path patterns must use '/' separators.")
+        path = PurePath(pattern)
+        if path.is_absolute() or any(part == ".." for part in path.parts):
+            raise ValueError("Watch path patterns must stay relative to the rule root.")
+    return normalized
+
+
 @dataclass(frozen=True)
 class WatchRule:
     """Validated declarative definition of one metadata watch rule."""
@@ -65,7 +87,6 @@ class WatchRule:
     root: str
     include: list[str]
     exclude: list[str]
-    recursive: bool
     priority: int
     metadata: dict[str, str | list[str]]
 
@@ -77,7 +98,6 @@ class WatchRule:
         metadata: dict[str, str | list[str]],
         include: list[str] | None = None,
         exclude: list[str] | None = None,
-        recursive: bool = False,
         priority: int = 0,
         id: str | None = None,
     ) -> "WatchRule":
@@ -85,9 +105,8 @@ class WatchRule:
 
         :param root: Existing directory to watch.
         :param metadata: Nonempty desired known tag mapping.
-        :param include: Filename include patterns.
-        :param exclude: Filename exclusion patterns.
-        :param recursive: Whether descendants are watched.
+        :param include: Root-relative forward-slash file path patterns.
+        :param exclude: Root-relative forward-slash exclusion patterns.
         :param priority: Precedence for conflicting metadata tags.
         :param id: UUID string, generated when omitted.
         :return: Validated watch rule.
@@ -117,9 +136,8 @@ class WatchRule:
         return cls(
             str(uuid.UUID(id)) if id else str(uuid.uuid4()),
             str(resolved),
-            ["*"] if include is None else list(include),
-            [] if exclude is None else list(exclude),
-            recursive,
+            _normalize_path_patterns(include, default=["*"]),
+            _normalize_path_patterns(exclude, default=[]),
             priority,
             cleaned,
         )
@@ -134,7 +152,6 @@ class WatchRule:
             "root": self.root,
             "include": self.include,
             "exclude": self.exclude,
-            "recursive": self.recursive,
             "priority": self.priority,
             "metadata": self.metadata,
         }
@@ -155,16 +172,16 @@ class WatchRule:
             root=Path(str(value["root"])),
             include=[str(item) for item in value.get("include", ["*"])],
             exclude=[str(item) for item in value.get("exclude", [])],
-            recursive=bool(value.get("recursive", False)),
             priority=value.get("priority", 0),
             metadata={str(key): item for key, item in metadata.items()},
         )
 
 
 class RuleStore:
-    """Atomically manage the YAML document shared by CLI and service."""
+    """Atomically manage the versioned YAML document shared by CLI and service."""
 
-    version = 2
+    version = 3
+    legacy_version = 2
 
     def __init__(self, path: Path | None = None) -> None:
         """Initialize the store.
@@ -225,6 +242,36 @@ class RuleStore:
             return None
         return stat.st_mtime_ns, stat.st_size
 
+    def _migrate_legacy_rule(self, value: dict[str, object]) -> dict[str, object]:
+        """Convert a version-two rule's recursion flag into explicit globstars.
+
+        :param value: Version-two serialized rule.
+        :return: Version-three-compatible serialized rule.
+        """
+        recursive = bool(value.get("recursive", False))
+
+        def upgrade(patterns: object, default: list[str]) -> list[str]:
+            result = (
+                [str(item) for item in patterns]
+                if isinstance(patterns, list)
+                else default
+            )
+            if not recursive:
+                return result
+            return [
+                f"**/{pattern}" if "/" not in pattern else pattern for pattern in result
+            ]
+
+        return {
+            key: item
+            for key, item in {
+                **value,
+                "include": upgrade(value.get("include"), ["*"]),
+                "exclude": upgrade(value.get("exclude"), []),
+            }.items()
+            if key != "recursive"
+        }
+
     def _load_unlocked(self) -> list[WatchRule]:
         """Load and validate rules without taking the RMW lock.
 
@@ -238,14 +285,20 @@ class RuleStore:
             payload = yaml.safe_load(handle) or {}
         if not isinstance(payload, dict):
             raise TypeError("Watch store must be a mapping.")
-        if payload.get("version", self.version) != self.version:
+        version = payload.get("version", self.version)
+        if version not in {self.legacy_version, self.version}:
             raise ValueError("Unsupported watch store version.")
         entries = payload.get("rules", [])
         if not isinstance(entries, list):
             raise TypeError("Watch store 'rules' must be a list.")
         if not all(isinstance(item, dict) for item in entries):
             raise TypeError("Watch store rule must be a mapping.")
-        rules = [WatchRule.from_dict(item) for item in entries]
+        source_entries = (
+            [self._migrate_legacy_rule(item) for item in entries]
+            if version == self.legacy_version
+            else entries
+        )
+        rules = [WatchRule.from_dict(item) for item in source_entries]
         if len({rule.id for rule in rules}) != len(rules):
             raise ValueError("Duplicate watch rule IDs.")
         return rules

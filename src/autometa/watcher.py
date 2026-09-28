@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from fnmatch import fnmatch
 import contextlib
 from dataclasses import dataclass
 import logging
@@ -70,8 +69,38 @@ def select_observer_factory(
     return Observer
 
 
+def _static_prefix(pattern: str) -> tuple[str, ...]:
+    """Return literal path components before the first glob component.
+
+    :param pattern: Root-relative slash-separated path pattern.
+    :return: Literal leading components.
+    """
+    prefix: list[str] = []
+    for component in pattern.split("/"):
+        if any(character in component for character in "*?["):
+            break
+        prefix.append(component)
+    return tuple(prefix)
+
+
+def observation_roots(rule: WatchRule) -> list[Path]:
+    """Return existing concrete ancestors sufficient to observe a rule's patterns.
+
+    :param rule: Rule whose include paths need observation.
+    :return: Deduplicated recursively observed directories.
+    """
+    root = Path(rule.root).resolve()
+    roots: set[Path] = set()
+    for pattern in rule.include:
+        candidate = root.joinpath(*_static_prefix(pattern))
+        while candidate != root and not candidate.is_dir():
+            candidate = candidate.parent
+        roots.add(candidate)
+    return sorted(roots)
+
+
 class PathMatcher:
-    """Apply one rule's explicit path matching semantics."""
+    """Match root-relative path glob patterns using Python 3.13 pathlib."""
 
     def __init__(self, rule: WatchRule) -> None:
         """Initialize a matcher.
@@ -82,10 +111,7 @@ class PathMatcher:
         self.root = Path(rule.root)
 
     def matches(self, path: Path) -> bool:
-        """Return whether a file is accepted by the rule.
-
-        Basename patterns such as ``*.mp3`` match every watched depth; patterns
-        containing a slash are matched against the relative POSIX path.
+        """Return whether a candidate matches the rule's full relative glob.
 
         :param path: Candidate filesystem path.
         :return: Whether it is included and not excluded.
@@ -94,22 +120,9 @@ class PathMatcher:
             relative = path.resolve().relative_to(self.root.resolve())
         except ValueError:
             return False
-        if not self.rule.recursive and len(relative.parts) != 1:
-            return False
-        candidate = relative.as_posix()
-        basename = relative.name
-
-        def matches_pattern(pattern: str) -> bool:
-            """Match basename patterns at all depths and slash patterns relatively.
-
-            :param pattern: Include or exclude glob pattern.
-            :return: Whether the candidate matches it.
-            """
-            return fnmatch(candidate if "/" in pattern else basename, pattern)
-
         return any(
-            matches_pattern(pattern) for pattern in self.rule.include
-        ) and not any(matches_pattern(pattern) for pattern in self.rule.exclude)
+            relative.full_match(pattern) for pattern in self.rule.include
+        ) and not any(relative.full_match(pattern) for pattern in self.rule.exclude)
 
 
 @dataclass(frozen=True)
@@ -484,27 +497,27 @@ class WatchService:
 
     def _schedule(self) -> None:
         """Create and start an observer for the current set of rules."""
+        roots = sorted(
+            {root for rule in self._rules for root in observation_roots(rule)}
+        )
         factory = self.observer_factory or select_observer_factory(
-            (Path(rule.root) for rule in self._rules),
-            observer_mode=self.observer_mode,
+            roots, observer_mode=self.observer_mode
         )
         observer = factory()
         handler = _QueueingHandler(self._enqueue_event)
-        for rule in self._rules:
-            observer.schedule(handler, rule.root, recursive=rule.recursive)
+        for root in roots:
+            observer.schedule(handler, root, recursive=True)
         observer.start()
         self._observer = observer
 
     def _initial_scan(self) -> None:
         """Enqueue all existing matching files before relying on events."""
         for rule in self._rules:
-            root = Path(rule.root)
-            iterator: Iterable[Path] = (
-                root.rglob("*") if rule.recursive else root.glob("*")
-            )
-            for path in iterator:
-                if path.is_file() and PathMatcher(rule).matches(path):
-                    self.queue.put(path)
+            matcher = PathMatcher(rule)
+            for root in observation_roots(rule):
+                for path in root.rglob("*"):
+                    if path.is_file() and matcher.matches(path):
+                        self.queue.put(path)
 
     def _process(self, path: Path) -> None:
         """Reconcile the effective metadata target for a settled path.

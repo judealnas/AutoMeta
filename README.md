@@ -140,12 +140,16 @@ originally installed for that configuration. `autometa watch run` remains
 available for debugging and for users who supply their own supervisor.
 
 ```bash
-# Add a recursive rule. --include can be supplied more than once.
-autometa watch add /music --include "*.mp3" --include "*.flac" \
-  --exclude "*.part" --recursive --artist="Alice,Bob" --year=2024
+# Patterns are relative to the concrete root; ** expresses any directory depth.
+autometa watch add /music --include "**/*.mp3" --include "**/*.flac" \
+  --exclude "**/*.part" --artist="Alice,Bob" --year=2024
+
+# One rule can cover dynamically created matching project directories.
+autometa watch add 'C:/Users/Jude/Music/Jude Tunes' \
+  --include '* Project/*.mp3' --include '* Project/*.flac' --year=2026
 
 # A deeper root overrides a broader root at the same priority.
-autometa watch add /music --include "*.mp3" --recursive \
+autometa watch add /music --include "**/*.mp3" \
   --genre "Classical"
 autometa watch add /music/live --include "*.mp3" \
   --genre "Live"

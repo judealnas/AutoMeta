@@ -41,7 +41,7 @@ def _store_with_rule(tmp_path: Path) -> RuleStore:
     root = tmp_path / "music"
     root.mkdir()
     store = RuleStore(tmp_path / "watchers.yaml")
-    store.add(WatchRule.create(root=root, recursive=True, metadata={"year": "2024"}))
+    store.add(WatchRule.create(root=root, metadata={"year": "2024"}))
     return store
 
 
