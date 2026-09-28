@@ -148,13 +148,15 @@ Configuration validation would reject:
 ### 6. Rule overlap and precedence
 
 Rules may overlap. For a matching file, the service first computes one effective
-metadata mapping and then reconciles it once. Values for different tags merge;
-for the same tag, the highest numeric `priority` wins (default `0`).
+metadata mapping and then reconciles it once. Values for different tags merge.
+For the same tag, the highest numeric `priority` wins (default `0`); at equal
+priority, the rule with the deeper root wins.
 
-Equal-priority rules assigning the same value are compatible. Equal-priority
-rules assigning different values for the same tag are reported with their rule
-IDs, and the file is skipped without a write. This prevents self-generated
-filesystem events from making rules overwrite each other indefinitely.
+Rules assigning the same value at equal precedence are compatible. Rules
+assigning different values at equal priority and root depth are reported with
+their rule IDs, and the file is skipped without a write. This prevents
+self-generated filesystem events from making rules overwrite each other
+indefinitely.
 
 ### 7. Declarative, atomic configuration
 

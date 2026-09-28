@@ -91,43 +91,48 @@ class RuleResolution:
 
 
 def resolve_effective_rule(path: Path, rules: Iterable[WatchRule]) -> RuleResolution:
-    """Merge matching rules by priority into one metadata mapping.
+    """Merge matching rules by priority and root specificity.
 
     Higher-priority assignments replace lower-priority assignments for the same
-    tag. Different values at the highest shared priority are conflicts, so the
-    caller must skip the path rather than choosing an arbitrary writer.
+    tag. At equal priority, a rule with a deeper root takes precedence. Different
+    values at equal priority and equal root depth are conflicts, so the caller
+    must skip the path rather than choosing an arbitrary writer.
 
     :param path: Candidate media file.
     :param rules: Configured watch rules to evaluate.
     :return: Effective rule or the conflicts that prevent reconciliation.
     """
-    selected: dict[str, tuple[int, str | list[str], set[str]]] = {}
+    selected: dict[str, tuple[int, int, str | list[str], set[str]]] = {}
     conflicts: dict[str, RuleConflict] = {}
     for rule in rules:
         if not PathMatcher(rule).matches(path):
             continue
+        root_depth = len(Path(rule.root).parts)
         for tag, value in rule.metadata.items():
             existing = selected.get(tag)
-            if existing is None or rule.priority > existing[0]:
-                selected[tag] = (rule.priority, value, {rule.id})
+            precedence = (rule.priority, root_depth)
+            if existing is None or precedence > existing[:2]:
+                selected[tag] = (rule.priority, root_depth, value, {rule.id})
                 conflicts.pop(tag, None)
-            elif rule.priority == existing[0]:
-                if value == existing[1]:
-                    existing[2].add(rule.id)
+            elif precedence == existing[:2]:
+                if value == existing[2]:
+                    existing[3].add(rule.id)
                 else:
-                    existing[2].add(rule.id)
+                    existing[3].add(rule.id)
                     conflicts[tag] = RuleConflict(
                         tag=tag,
                         priority=rule.priority,
-                        rule_ids=tuple(sorted(existing[2])),
+                        rule_ids=tuple(sorted(existing[3])),
                     )
     if conflicts:
         return RuleResolution(None, tuple(conflicts.values()))
     if not selected:
         return RuleResolution(None, ())
-    metadata = {tag: value for tag, (_, value, _) in selected.items()}
+    metadata = {tag: value for tag, (_, _, value, _) in selected.items()}
     rule_ids = sorted(
-        rule_id for _, _, matching_ids in selected.values() for rule_id in matching_ids
+        rule_id
+        for _, _, _, matching_ids in selected.values()
+        for rule_id in matching_ids
     )
     return RuleResolution(
         EffectiveRule(",".join(dict.fromkeys(rule_ids)), metadata), ()

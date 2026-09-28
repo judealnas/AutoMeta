@@ -55,12 +55,12 @@ def test_effective_rule_merges_metadata_and_prefers_higher_priority(
     base = WatchRule.create(
         root=root,
         recursive=True,
-        priority=0,
+        priority=100,
         metadata={"artist": "Alice", "genre": "Classical"},
     )
     override = WatchRule.create(
         root=root / "live",
-        priority=100,
+        priority=0,
         metadata={"genre": "Live"},
     )
 
@@ -68,7 +68,33 @@ def test_effective_rule_merges_metadata_and_prefers_higher_priority(
 
     assert resolution.conflicts == ()
     assert resolution.rule is not None
-    assert resolution.rule.metadata == {"artist": "Alice", "genre": "Live"}
+    assert resolution.rule.metadata == {"artist": "Alice", "genre": "Classical"}
+
+
+def test_effective_rule_prefers_deeper_matching_root_at_same_priority(
+    tmp_path: Path,
+) -> None:
+    """A scoped rule overrides a broader matching root at equal priority."""
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    path = child / "music.mp3"
+    path.touch()
+    broad = WatchRule.create(
+        root=parent,
+        recursive=True,
+        metadata={"artist": "Broad Artist", "genre": "Jazz"},
+    )
+    scoped = WatchRule.create(
+        root=child,
+        metadata={"artist": "Scoped Artist"},
+    )
+
+    resolution = resolve_effective_rule(path, [broad, scoped])
+
+    assert resolution.conflicts == ()
+    assert resolution.rule is not None
+    assert resolution.rule.metadata == {"artist": "Scoped Artist", "genre": "Jazz"}
 
 
 def test_effective_rule_rejects_same_priority_conflicts(tmp_path: Path) -> None:
