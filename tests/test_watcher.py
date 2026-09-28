@@ -101,6 +101,23 @@ def test_stability_probe_converges_for_unchanged_file(tmp_path: Path) -> None:
     assert ready is True
 
 
+def test_stability_probe_forgets_completed_and_missing_paths(tmp_path: Path) -> None:
+    """Probe state is released after work completes or a path disappears."""
+    path = tmp_path / "track.mp3"
+    path.write_bytes(b"stable content")
+    probe = FileStabilityProbe(settle_seconds=0)
+
+    assert probe.ready(path) is False
+    assert path.resolve() in probe._seen
+    probe.forget(path)
+    assert path.resolve() not in probe._seen
+
+    assert probe.ready(path) is False
+    path.unlink()
+    assert probe.ready(path) is False
+    assert path.resolve() not in probe._seen
+
+
 def test_reconciler_is_idempotent_and_isolates_malformed_file(tmp_path: Path) -> None:
     """A reconciliation saves once and never lets media exceptions escape."""
 
@@ -131,6 +148,112 @@ def test_reconciler_is_idempotent_and_isolates_malformed_file(tmp_path: Path) ->
         lambda _: (_ for _ in ()).throw(ValueError("bad media"))
     )
     assert broken.reconcile(path, rule) is False
+
+
+def test_service_requeues_event_received_during_inflight_work(tmp_path: Path) -> None:
+    """A change arriving during reconciliation schedules one follow-up pass."""
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    class RecordingPool:
+        def __init__(self) -> None:
+            self.submissions: list[Path] = []
+
+        def submit(self, callback, path: Path) -> None:
+            self.submissions.append(path)
+
+    class ReadyProbe:
+        def ready(self, path: Path) -> bool:
+            return True
+
+        def forget(self, path: Path) -> None:
+            pass
+
+    root = tmp_path / "music"
+    root.mkdir()
+    path = root / "track.mp3"
+    path.write_bytes(b"x")
+    store = RuleStore(tmp_path / "watchers.yaml")
+    store.add(WatchRule.create(root=root, metadata={"year": "2024"}))
+    service = WatchService(store, debounce_delay=0)
+    service._rules = store.load()
+    service.probe = ReadyProbe()
+    service._inflight.add(path.resolve())
+    service.queue.put(path)
+
+    pool = RecordingPool()
+    service._dispatch_ready(pool)
+    assert pool.submissions == []
+
+    # Completing the original in-flight pass must preserve one later event.
+    service._process(path.resolve())
+    assert service.queue.pop_ready() == [path.resolve()]
+
+
+def test_service_shutdown_deadline_does_not_wait_for_blocked_worker(
+    tmp_path: Path,
+) -> None:
+    """Shutdown returns on deadline even if a reconciler call remains blocked."""
+    import threading
+
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    class Observer:
+        def schedule(self, *args, **kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def join(self) -> None:
+            pass
+
+    class BlockingReconciler:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def reconcile(self, path: Path, rule: WatchRule) -> bool:
+            self.started.set()
+            self.release.wait()
+            return False
+
+    root = tmp_path / "music"
+    root.mkdir()
+    target = root / "existing.mp3"
+    target.write_bytes(b"x")
+    store = RuleStore(tmp_path / "watchers.yaml")
+    store.add(WatchRule.create(root=root, include=["*.mp3"], metadata={"year": "2024"}))
+    reconciler = BlockingReconciler()
+    service = WatchService(
+        store,
+        observer_factory=Observer,
+        reconciler=reconciler,
+        debounce_delay=0,
+        shutdown_timeout=0.05,
+    )
+    service.probe = FileStabilityProbe(settle_seconds=0)
+    result: list[int] = []
+    thread = threading.Thread(target=lambda: result.append(service.run()))
+    thread.start()
+    try:
+        assert reconciler.started.wait(timeout=2)
+        started = time.monotonic()
+        service.request_shutdown()
+        thread.join(timeout=1)
+        assert not thread.is_alive(), "shutdown waited for blocked worker"
+        assert time.monotonic() - started < 0.5
+        assert result == [0]
+    finally:
+        reconciler.release.set()
+        thread.join(timeout=2)
 
 
 def test_service_reports_observer_death_and_singleton_failure(tmp_path: Path) -> None:

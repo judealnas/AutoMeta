@@ -242,6 +242,19 @@ class RuleStore:
             raise ValueError("Duplicate watch rule IDs.")
         return rules
 
+    def _fsync_directory(self, directory: Path) -> None:
+        """Persist a completed atomic rename on POSIX filesystems.
+
+        :param directory: Directory containing the replaced store file.
+        """
+        if os.name == "nt":
+            return
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
     def _save_unlocked(self, rules: list[WatchRule]) -> None:
         """Fsync a same-directory temporary YAML file and atomically replace store.
 
@@ -267,6 +280,7 @@ class RuleStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
+            self._fsync_directory(self.path.parent)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

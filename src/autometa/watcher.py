@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 from fnmatch import fnmatch
 import contextlib
 import logging
 from pathlib import Path
+import queue
 import signal
 import threading
 import time
@@ -138,11 +138,12 @@ class FileStabilityProbe:
         :param path: Existing file to inspect.
         :return: Whether the file has been unchanged for the settle period.
         """
+        key = path.resolve()
         try:
             stat = path.stat()
         except OSError:
+            self._seen.pop(key, None)
             return False
-        key = path.resolve()
         state = (stat.st_size, stat.st_mtime_ns)
         now = time.monotonic()
         previous = self._seen.get(key)
@@ -151,6 +152,17 @@ class FileStabilityProbe:
             self._seen[key] = (*state, now)
             return False
         return now - previous[2] >= self.settle_seconds
+
+    def forget(self, path: Path) -> None:
+        """Discard settled-state tracking for a completed path.
+
+        :param path: Path whose state should no longer be retained.
+        """
+        self._seen.pop(path.resolve(), None)
+
+    def clear(self) -> None:
+        """Discard all state, such as after a rule-set reload."""
+        self._seen.clear()
 
 
 class MetadataReconciler:
@@ -211,6 +223,86 @@ class _QueueingHandler(FileSystemEventHandler):
         self.callback(event)
 
 
+class _DaemonWorkerPool:
+    """Run bounded reconciliation work without making shutdown unbounded."""
+
+    def __init__(self, workers: int) -> None:
+        """Start daemon workers that consume submitted callbacks.
+
+        :param workers: Maximum number of active worker threads.
+        :raises ValueError: If workers is not positive.
+        """
+        if workers < 1:
+            raise ValueError("Watch service requires at least one worker.")
+        self._tasks: queue.Queue[tuple[Callable[[Path], None], Path] | None] = (
+            queue.Queue()
+        )
+        self._accepting = True
+        self._closed = False
+        self._lock = threading.Lock()
+        self._threads = [
+            threading.Thread(
+                target=self._run, daemon=True, name=f"autometa-watch-{index}"
+            )
+            for index in range(workers)
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _run(self) -> None:
+        """Execute queued work until shutdown sends a sentinel."""
+        while True:
+            task = self._tasks.get()
+            try:
+                if task is None:
+                    return
+                callback, path = task
+                callback(path)
+            finally:
+                self._tasks.task_done()
+
+    def submit(self, callback: Callable[[Path], None], path: Path) -> bool:
+        """Queue one work item unless shutdown has started.
+
+        :param callback: Worker callback.
+        :param path: Path to pass to the callback.
+        :return: Whether the task was accepted.
+        """
+        with self._lock:
+            if not self._accepting:
+                return False
+            self._tasks.put((callback, path))
+            return True
+
+    def shutdown(self, timeout: float) -> None:
+        """Cancel queued work and wait only up to the caller's deadline.
+
+        Running callbacks cannot be force-cancelled safely. Workers are daemon
+        threads so a blocked callback cannot keep the foreground service process
+        alive after the configured shutdown deadline.
+
+        :param timeout: Maximum seconds to wait for workers to exit.
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._accepting = False
+            # Drop not-yet-started work before placing termination sentinels.
+            while True:
+                try:
+                    self._tasks.get_nowait()
+                except queue.Empty:
+                    break
+                else:
+                    self._tasks.task_done()
+            for _ in self._threads:
+                self._tasks.put(None)
+        deadline = time.monotonic() + max(timeout, 0)
+        for thread in self._threads:
+            thread.join(timeout=max(deadline - time.monotonic(), 0))
+
+
 class WatchService:
     """Run all configured rules in one supervised foreground service."""
 
@@ -244,6 +336,7 @@ class WatchService:
         self._observer: Observer | None = None
         self._rules: list[WatchRule] = []
         self._inflight: set[Path] = set()
+        self._dirty_paths: set[Path] = set()
         self._inflight_lock = threading.Lock()
 
     def request_shutdown(self, *_: object) -> None:
@@ -285,34 +378,51 @@ class WatchService:
                     self.queue.put(path)
 
     def _process(self, path: Path) -> None:
-        """Reconcile every matching rule for a settled path with bounded retry.
+        """Reconcile every matching rule for a settled path.
 
         :param path: Candidate file path.
         """
+        settled = False
         try:
             if not self.probe.ready(path):
-                self.queue.put(path)
+                if not self.shutdown_event.is_set():
+                    self.queue.put(path)
                 return
+            settled = True
             for rule in self._rules:
                 if PathMatcher(rule).matches(path):
                     self.reconciler.reconcile(path, rule)
         except Exception:
             LOGGER.exception("Unexpected worker failure for %s", path)
         finally:
+            if settled:
+                self.probe.forget(path)
+            requeue = False
             with self._inflight_lock:
                 self._inflight.discard(path)
+                if path in self._dirty_paths:
+                    self._dirty_paths.discard(path)
+                    requeue = not self.shutdown_event.is_set()
+            if requeue:
+                self.queue.put(path)
 
-    def _dispatch_ready(self, executor: ThreadPoolExecutor) -> None:
+    def _dispatch_ready(self, executor: _DaemonWorkerPool) -> None:
         """Submit ready, non-duplicate paths to the bounded worker pool.
 
-        :param executor: Worker executor.
+        A fresh event for a path currently being reconciled is remembered and
+        produces one follow-up pass once the active work completes.
+
+        :param executor: Worker pool.
         """
         for path in self.queue.pop_ready():
             with self._inflight_lock:
                 if path in self._inflight:
+                    self._dirty_paths.add(path)
                     continue
                 self._inflight.add(path)
-            executor.submit(self._process, path)
+            if not executor.submit(self._process, path):
+                with self._inflight_lock:
+                    self._inflight.discard(path)
 
     def run(self) -> int:
         """Run until shutdown, observer death, or singleton acquisition failure.
@@ -344,7 +454,8 @@ class WatchService:
             self._rules = self.store.load()
             self._schedule()
             self._initial_scan()
-            with ThreadPoolExecutor(max_workers=self.workers) as executor:
+            pool = _DaemonWorkerPool(self.workers)
+            try:
                 while not self.shutdown_event.wait(0.05):
                     if self._observer is None or not self._observer.is_alive():
                         LOGGER.error("Watch observer stopped unexpectedly.")
@@ -353,15 +464,19 @@ class WatchService:
                         self._observer.stop()
                         self._observer.join()
                         self._rules = self.store.reload()
+                        self.probe.clear()
                         self._schedule()
                         self._initial_scan()
-                    self._dispatch_ready(executor)
+                    self._dispatch_ready(pool)
                 if self._observer is not None:
                     self._observer.stop()
                     self._observer.join()
                 deadline = time.monotonic() + self.shutdown_timeout
                 while self._inflight and time.monotonic() < deadline:
                     time.sleep(0.01)
+                pool.shutdown(timeout=max(deadline - time.monotonic(), 0))
+            finally:
+                pool.shutdown(timeout=0)
             return 0
         except Exception:
             LOGGER.exception("Watch service failed")

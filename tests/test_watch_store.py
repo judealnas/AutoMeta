@@ -37,8 +37,10 @@ def test_watch_rule_validates_directory_and_known_nonempty_metadata(
         WatchRule.create(root=root, metadata={})
 
 
-def test_rule_store_add_remove_reload_and_atomic_yaml(tmp_path: Path) -> None:
-    """A store atomically persists rules and detects later replacements."""
+def test_rule_store_add_remove_reload_and_atomic_yaml(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A store atomically persists rules, fsyncs its directory, and reloads."""
     from autometa.watch_store import RuleStore
 
     root = tmp_path / "music"
@@ -46,8 +48,15 @@ def test_rule_store_add_remove_reload_and_atomic_yaml(tmp_path: Path) -> None:
     store_path = tmp_path / "watchers.yaml"
     store = RuleStore(store_path)
     rule = WatchRule.create(root=root, metadata={"year": "2024"})
+    fsynced_directories: list[Path] = []
+    monkeypatch.setattr(
+        store,
+        "_fsync_directory",
+        lambda directory: fsynced_directories.append(directory),
+    )
 
     store.add(rule)
+    assert fsynced_directories == [store_path.parent]
     assert store.load() == [rule]
     assert "version: 2" in store_path.read_text()
     assert store.changed() is False
