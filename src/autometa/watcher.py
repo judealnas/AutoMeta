@@ -15,12 +15,59 @@ from typing import Callable, Iterable
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 
 from autometa.core import MusicFile
 from autometa.tags import Tags
 from autometa.watch_store import RuleStore, WatchRule
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _is_wsl() -> bool:
+    """Return whether this Linux process is running under WSL.
+
+    :return: Whether the current environment is Windows Subsystem for Linux.
+    """
+    if __import__("os").environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text().lower()
+    except OSError:
+        return False
+
+
+def _is_wsl_windows_mount(path: Path) -> bool:
+    """Return whether a path uses the conventional WSL Windows-drive mount.
+
+    :param path: Candidate watch root.
+    :return: Whether the path is beneath ``/mnt/<drive>``.
+    """
+    parts = path.expanduser().resolve().parts
+    return len(parts) >= 3 and parts[1] == "mnt" and len(parts[2]) == 1
+
+
+def select_observer_factory(
+    roots: Iterable[Path], *, observer_mode: str = "auto", is_wsl: bool | None = None
+) -> Callable[[], Observer]:
+    """Choose native or polling watchdog observation for configured roots.
+
+    :param roots: Rule roots that will be scheduled by the observer.
+    :param observer_mode: ``auto``, ``native``, or ``polling``.
+    :param is_wsl: Optional environment override for testing.
+    :return: Zero-argument watchdog observer constructor.
+    :raises ValueError: If observer_mode is unsupported.
+    """
+    if observer_mode == "polling":
+        return PollingObserver
+    if observer_mode == "native":
+        return Observer
+    if observer_mode != "auto":
+        raise ValueError(f"Unknown observer mode: {observer_mode}")
+    running_in_wsl = _is_wsl() if is_wsl is None else is_wsl
+    if running_in_wsl and any(_is_wsl_windows_mount(root) for root in roots):
+        return PollingObserver
+    return Observer
 
 
 class PathMatcher:
@@ -385,7 +432,8 @@ class WatchService:
         self,
         store: RuleStore,
         *,
-        observer_factory: Callable[[], Observer] = Observer,
+        observer_factory: Callable[[], Observer] | None = None,
+        observer_mode: str = "auto",
         reconciler: MetadataReconciler | None = None,
         workers: int = 2,
         debounce_delay: float = 0.25,
@@ -394,7 +442,8 @@ class WatchService:
         """Initialize service dependencies.
 
         :param store: Persistent declarative rule store.
-        :param observer_factory: Injectable watchdog observer constructor.
+        :param observer_factory: Optional injectable watchdog observer constructor.
+        :param observer_mode: ``auto``, ``native``, or ``polling`` selection.
         :param reconciler: Injectable metadata reconciliation component.
         :param workers: Maximum concurrent file workers.
         :param debounce_delay: Event quiet period.
@@ -402,6 +451,7 @@ class WatchService:
         """
         self.store = store
         self.observer_factory = observer_factory
+        self.observer_mode = observer_mode
         self.reconciler = reconciler or MetadataReconciler()
         self.workers = workers
         self.queue = DebounceQueue(debounce_delay)
@@ -434,7 +484,11 @@ class WatchService:
 
     def _schedule(self) -> None:
         """Create and start an observer for the current set of rules."""
-        observer = self.observer_factory()
+        factory = self.observer_factory or select_observer_factory(
+            (Path(rule.root) for rule in self._rules),
+            observer_mode=self.observer_mode,
+        )
+        observer = factory()
         handler = _QueueingHandler(self._enqueue_event)
         for rule in self._rules:
             observer.schedule(handler, rule.root, recursive=rule.recursive)

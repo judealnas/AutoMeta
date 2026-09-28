@@ -11,6 +11,7 @@ import warnings
 from autometa.config import Config
 from autometa.core import MusicFile, UnsupportedFileTypeError
 from autometa.logging_util import setup_logging
+from autometa.service_manager import ServiceManagerError, WatchServiceManager
 from autometa.tags import Tags
 from autometa.watch_store import (
     RuleStore,
@@ -140,7 +141,21 @@ WATCH_UPDATE_RECURSIVE.add_argument(
     help="Watch only direct children of the root.",
 )
 add_metadata_arguments(WATCH_UPDATE, include_append_artists=False)
-WATCH_SUBPARSERS.add_parser("run", help="Run all rules in the foreground.")
+WATCH_RUN = WATCH_SUBPARSERS.add_parser("run", help="Run all rules in the foreground.")
+WATCH_RUN.add_argument(
+    "--observer",
+    choices=("auto", "native", "polling"),
+    default="auto",
+    help="Filesystem event backend (default: auto).",
+)
+WATCH_SUBPARSERS.add_parser(
+    "start", help="Install or update and start the watch service."
+)
+WATCH_SUBPARSERS.add_parser("stop", help="Stop the managed watch service.")
+WATCH_SUBPARSERS.add_parser("status", help="Show managed watch-service status.")
+WATCH_SUBPARSERS.add_parser(
+    "uninstall", help="Stop and remove the managed watch service."
+)
 
 
 def _collect_metadata(args: argparse.Namespace) -> dict[Tags, str | list[str] | int]:
@@ -242,8 +257,21 @@ def _handle_watch(argv: list[str]) -> int:
                 return 0
             print(f"Watch rule not found: {args.id}", file=sys.stderr)
             return 1
-        return WatchService(store).run()
-    except (OSError, TypeError, ValueError) as exc:
+        if args.action in {"start", "stop", "status", "uninstall"}:
+            manager = WatchServiceManager(store)
+            operation = getattr(manager, args.action)
+            status = operation()
+            state = "running" if status.running else "stopped"
+            if args.action == "start":
+                print(f"started {status.backend} service {status.name}")
+            elif args.action == "uninstall":
+                print(f"uninstalled {status.backend} service {status.name}")
+            else:
+                installed = "installed" if status.installed else "not installed"
+                print(f"{status.backend} service {status.name}: {installed}, {state}")
+            return 0
+        return WatchService(store, observer_mode=args.observer).run()
+    except (OSError, ServiceManagerError, TypeError, ValueError) as exc:
         print(f"autometa watch: error: {exc}", file=sys.stderr)
         return 2
 

@@ -146,6 +146,32 @@ def test_watch_cli_rejects_invalid_command_with_nonzero_exit(tmp_path: Path) -> 
         assert main(["watch", "start", "1"]) == 2
 
 
+def test_watch_start_delegates_to_platform_service_manager(
+    tmp_path: Path, capsys
+) -> None:
+    """Start installs and launches the managed platform service."""
+    from autometa.service_manager import ServiceStatus
+
+    with patch("autometa.cli.WatchServiceManager") as manager_type:
+        manager_type.return_value.start.return_value = ServiceStatus(
+            "systemd", "autometa-watch-test", installed=True, running=True
+        )
+        with patch.dict(os.environ, {ENV_STORE_PATH: str(tmp_path / "store.yaml")}):
+            assert main(["watch", "start"]) == 0
+
+    assert "started systemd service autometa-watch-test" in capsys.readouterr().out
+
+
+def test_watch_run_accepts_explicit_observer_mode(tmp_path: Path) -> None:
+    """Foreground operation can force polling or native watchdog events."""
+    with patch("autometa.cli.WatchService.run", return_value=0) as run:
+        with patch.dict(os.environ, {ENV_STORE_PATH: str(tmp_path / "store.yaml")}):
+            assert main(["watch", "run", "--observer", "polling"]) == 0
+
+    assert run.call_args.kwargs == {}
+    assert run.call_args.args == ()
+
+
 def test_watch_run_returns_service_exit_code(tmp_path: Path) -> None:
     """The foreground command returns the service's own health exit code."""
     with patch("autometa.cli.WatchService.run", return_value=7):

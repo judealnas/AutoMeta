@@ -20,16 +20,24 @@ autometa watch update <id> --year 2025
 # A scoped override wins per tag over a broad default.
 autometa watch update <id> --priority 100
 autometa watch remove <id>
-autometa watch run
+autometa watch start
+autometa watch status
+autometa watch stop
+autometa watch uninstall
+# Direct foreground mode remains useful for debugging.
+autometa watch run --observer auto
 ```
 
-`autometa watch run` would run in the foreground. For persistent background
-operation, systemd, launchd, or Windows Service Manager should supervise it.
-That avoids reimplementing daemonization, PID management, logging, restart
-policies, and platform-specific termination.
+`autometa watch run` runs in the foreground. `autometa watch start` installs or
+updates a per-user supervisor for it: a systemd user unit on Linux, a launchd
+LaunchAgent on macOS, or a Task Scheduler logon task on Windows. `stop` retains
+the generated definition, while `uninstall` removes it. This keeps the watcher
+process itself portable while delegating restart, logging, and lifecycle policy
+to the host operating system.
 
-A later convenience command could install the appropriate service definition,
-but service management would remain outside the watcher core.
+The generated service always invokes `autometa watch run --observer auto`. In
+WSL, `auto` selects polling if any watch root is beneath `/mnt/<drive>`, where
+Windows-side changes do not reliably reach Linux's native event observer.
 
 ## Architecture
 

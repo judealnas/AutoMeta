@@ -18,7 +18,23 @@ from autometa.watcher import (
     MetadataReconciler,
     PathMatcher,
     resolve_effective_rule,
+    select_observer_factory,
 )
+
+
+def test_auto_observer_polls_wsl_mounted_windows_roots() -> None:
+    """Auto mode selects polling when WSL watches a mounted Windows drive."""
+    factory = select_observer_factory(
+        [Path("/mnt/c/Users/Jude/Music")], observer_mode="auto", is_wsl=True
+    )
+
+    assert factory.__name__ == "PollingObserver"
+    assert (
+        select_observer_factory(
+            [Path("/home/jude/music")], observer_mode="auto", is_wsl=True
+        ).__name__
+        == "InotifyObserver"
+    )
 
 
 def test_matcher_matches_basenames_at_nested_depth_and_excludes_win(

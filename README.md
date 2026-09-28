@@ -120,9 +120,24 @@ If no extension given, AutoMeta tries different decoders until one works
 
 ### Automated Watch Service
 
-Watch rules are declarative and are run by one foreground service. Use your
-service supervisor (systemd, launchd, Windows Service Manager, Docker, etc.) to
-keep `autometa watch run` running and restart it after failures.
+Watch rules are declarative and are run by one foreground service. Autometa can
+install a per-user background supervisor on Linux, macOS, and Windows:
+
+```bash
+# Install/update and start the native per-user service.
+autometa watch start
+autometa watch status
+
+# Stop it without removing the service definition, or remove it entirely.
+autometa watch stop
+autometa watch uninstall
+```
+
+`start` uses a systemd user unit on Linux, a launchd LaunchAgent on macOS, and a
+Task Scheduler logon task on Windows. It records the selected backend beside the
+rule store, so `stop`, `status`, and `uninstall` continue to target the service
+originally installed for that configuration. `autometa watch run` remains
+available for debugging and for users who supply their own supervisor.
 
 ```bash
 # Add a recursive rule. --include can be supplied more than once.
@@ -152,8 +167,9 @@ autometa watch update <uuid> --clear-exclude
 autometa watch update <uuid> --clear-include
 autometa watch remove <uuid>
 
-# Start the single foreground reconciliation service.
-autometa watch run
+# Start the single foreground reconciliation service. ``auto`` selects polling
+# for WSL roots under /mnt/<drive>; use ``native`` or ``polling`` to force it.
+autometa watch run --observer auto
 ```
 
 The YAML watch store contains rule IDs, roots, include/exclude patterns,
