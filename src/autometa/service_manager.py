@@ -116,12 +116,8 @@ class WatchServiceManager:
                     "/Create",
                     "/TN",
                     spec.name,
-                    "/TR",
-                    self._windows_command(spec),
-                    "/SC",
-                    "ONLOGON",
-                    "/RL",
-                    "LIMITED",
+                    "/XML",
+                    spec.definition_path,
                     "/F",
                 ]
             )
@@ -191,6 +187,7 @@ class WatchServiceManager:
             Path(spec.definition_path).unlink(missing_ok=True)
         else:
             self._run(["schtasks", "/Delete", "/TN", spec.name, "/F"], (0, 1))
+            Path(spec.definition_path).unlink(missing_ok=True)
         self.manifest_path.unlink(missing_ok=True)
         return ServiceStatus(spec.backend, spec.name, installed=False, running=False)
 
@@ -214,7 +211,7 @@ class WatchServiceManager:
             backend = "launchd"
         elif self.platform_name == "Windows":
             name = f"Autometa Watch {digest}"
-            path = self.manifest_path
+            path = self.store.path.with_suffix(".task.xml")
             backend = "schtasks"
         else:
             raise ServiceManagerError(
@@ -243,6 +240,10 @@ class WatchServiceManager:
             path = Path(spec.definition_path)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(self._render_launchd(spec))
+        else:
+            path = Path(spec.definition_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(self._render_windows_task(spec), encoding="utf-16")
 
     def _write_manifest(self, spec: _ServiceSpec) -> None:
         """Persist the backend identity used by future lifecycle commands.
@@ -335,11 +336,58 @@ class WatchServiceManager:
             "</dict>\n</plist>\n"
         )
 
-    def _windows_command(self, spec: _ServiceSpec) -> str:
-        """Return a Task Scheduler command that pins the exact rule-store path.
+    def _render_windows_task(self, spec: _ServiceSpec) -> str:
+        """Render a hidden, per-user Task Scheduler definition.
 
         :param spec: Service execution definition.
-        :return: Command line evaluated by the Windows command interpreter.
+        :return: Complete Task Scheduler XML document.
+        """
+        return (
+            '<?xml version="1.0" encoding="UTF-16"?>\n'
+            '<Task version="1.2" '
+            'xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+            "  <RegistrationInfo>\n"
+            "    <Description>Autometa metadata watch service</Description>\n"
+            "  </RegistrationInfo>\n"
+            "  <Triggers>\n"
+            "    <LogonTrigger>\n"
+            "      <Enabled>true</Enabled>\n"
+            "    </LogonTrigger>\n"
+            "  </Triggers>\n"
+            "  <Principals>\n"
+            '    <Principal id="Author">\n'
+            "      <LogonType>InteractiveToken</LogonType>\n"
+            "      <RunLevel>LeastPrivilege</RunLevel>\n"
+            "    </Principal>\n"
+            "  </Principals>\n"
+            "  <Settings>\n"
+            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
+            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
+            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
+            "    <AllowHardTerminate>true</AllowHardTerminate>\n"
+            "    <StartWhenAvailable>true</StartWhenAvailable>\n"
+            "    <RunOnlyIfIdle>false</RunOnlyIfIdle>\n"
+            "    <AllowStartOnDemand>true</AllowStartOnDemand>\n"
+            "    <Enabled>true</Enabled>\n"
+            "    <Hidden>true</Hidden>\n"
+            "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n"
+            "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n"
+            "    <Priority>7</Priority>\n"
+            "  </Settings>\n"
+            '  <Actions Context="Author">\n'
+            "    <Exec>\n"
+            "      <Command>cmd.exe</Command>\n"
+            f"      <Arguments>{xml_escape(self._windows_command_arguments(spec))}</Arguments>\n"
+            "    </Exec>\n"
+            "  </Actions>\n"
+            "</Task>\n"
+        )
+
+    def _windows_command_arguments(self, spec: _ServiceSpec) -> str:
+        """Return Task Scheduler arguments for the watcher command wrapper.
+
+        :param spec: Service execution definition.
+        :return: Arguments supplied to ``cmd.exe``.
         """
         command = subprocess.list2cmdline(
             [
@@ -352,7 +400,7 @@ class WatchServiceManager:
                 spec.observer,
             ]
         )
-        return f'cmd.exe /d /s /c "set "AUTOMETA_WATCH_STORE={spec.store_path}"&&{command}"'
+        return f'/d /s /c "set "AUTOMETA_WATCH_STORE={spec.store_path}"&&{command}"'
 
     def _require_uid(self) -> int:
         """Return the launchd GUI-domain user ID.

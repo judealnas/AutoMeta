@@ -113,17 +113,21 @@ def test_windows_start_creates_and_runs_user_task(tmp_path: Path) -> None:
     status = manager.start()
 
     assert status.backend == "schtasks"
-    assert runner.commands[0][:6] == [
+    task_xml = tmp_path / "watchers.task.xml"
+    assert task_xml.is_file()
+    task_text = task_xml.read_text(encoding="utf-16")
+    assert "<Hidden>true</Hidden>" in task_text
+    assert "<LogonTrigger>" in task_text
+    assert "AUTOMETA_WATCH_STORE" in task_text
+    assert runner.commands[0] == [
         "schtasks",
         "/Create",
         "/TN",
         status.name,
-        "/TR",
-        runner.commands[0][5],
+        "/XML",
+        str(task_xml),
+        "/F",
     ]
-    assert "/SC" in runner.commands[0]
-    assert "ONLOGON" in runner.commands[0]
-    assert "AUTOMETA_WATCH_STORE" in runner.commands[0][5]
     assert runner.commands[1] == ["schtasks", "/Run", "/TN", status.name]
 
 
