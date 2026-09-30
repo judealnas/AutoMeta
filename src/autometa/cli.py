@@ -136,6 +136,11 @@ WATCH_UPDATE_EXCLUDE.add_argument(
 add_metadata_arguments(WATCH_UPDATE, include_append_artists=False)
 WATCH_RUN = WATCH_SUBPARSERS.add_parser("run", help="Run all rules in the foreground.")
 WATCH_RUN.add_argument(
+    "--store",
+    type=Path,
+    help=argparse.SUPPRESS,
+)
+WATCH_RUN.add_argument(
     "--observer",
     choices=("auto", "native", "polling"),
     default="auto",
@@ -367,7 +372,7 @@ def _handle_watch(argv: list[str]) -> int:
     except SystemExit as exc:
         return int(exc.code)
     setup_logging(1)
-    store = RuleStore(get_watch_store_path())
+    store = RuleStore(getattr(args, "store", None) or get_watch_store_path())
     try:
         if args.action == "add":
             metadata = normalize_metadata(_collect_metadata(args))

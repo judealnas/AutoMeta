@@ -3,6 +3,8 @@
 import json
 import logging
 from pathlib import Path
+import sys
+from unittest.mock import patch
 
 from autometa.watch_logging import (
     get_watch_log_path,
@@ -114,6 +116,18 @@ def test_log_watch_event_emits_a_readable_stderr_message(
     stderr = capsys.readouterr().err
     assert "file_processed" in stderr
     assert str(watched_path) in stderr
+
+
+def test_setup_watch_logging_works_without_a_console_stream(tmp_path: Path) -> None:
+    """Windowless Python keeps durable JSONL logging when stderr is unavailable."""
+    log_path = tmp_path / "windowless.log"
+    with patch.object(sys, "stderr", None):
+        logger = setup_watch_logging(log_path)
+        log_watch_event(logger, "service_started", logging.INFO)
+
+    assert (
+        json.loads(log_path.read_text(encoding="utf-8"))["event"] == "service_started"
+    )
 
 
 def test_setup_watch_logging_does_not_duplicate_file_output(tmp_path: Path) -> None:

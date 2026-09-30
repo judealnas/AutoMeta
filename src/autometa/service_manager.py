@@ -376,31 +376,39 @@ class WatchServiceManager:
             "  </Settings>\n"
             '  <Actions Context="Author">\n'
             "    <Exec>\n"
-            "      <Command>cmd.exe</Command>\n"
+            f"      <Command>{xml_escape(self._windows_pythonw(spec))}</Command>\n"
             f"      <Arguments>{xml_escape(self._windows_command_arguments(spec))}</Arguments>\n"
             "    </Exec>\n"
             "  </Actions>\n"
             "</Task>\n"
         )
 
-    def _windows_command_arguments(self, spec: _ServiceSpec) -> str:
-        """Return Task Scheduler arguments for the watcher command wrapper.
+    def _windows_pythonw(self, spec: _ServiceSpec) -> str:
+        """Return the windowless interpreter adjacent to the managed interpreter.
 
         :param spec: Service execution definition.
-        :return: Arguments supplied to ``cmd.exe``.
+        :return: Path to the Windows ``pythonw.exe`` executable.
         """
-        command = subprocess.list2cmdline(
+        return str(Path(spec.executable).with_name("pythonw.exe"))
+
+    def _windows_command_arguments(self, spec: _ServiceSpec) -> str:
+        """Return direct, windowless watcher arguments for Task Scheduler.
+
+        :param spec: Service execution definition.
+        :return: Arguments supplied to ``pythonw.exe``.
+        """
+        return subprocess.list2cmdline(
             [
-                spec.executable,
                 "-m",
                 "autometa.cli",
                 "watch",
                 "run",
+                "--store",
+                spec.store_path,
                 "--observer",
                 spec.observer,
             ]
         )
-        return f'/d /s /c "set "AUTOMETA_WATCH_STORE={spec.store_path}"&&{command}"'
 
     def _require_uid(self) -> int:
         """Return the launchd GUI-domain user ID.

@@ -194,6 +194,13 @@ def test_watch_run_configures_file_backed_watch_logging(tmp_path: Path) -> None:
     assert setup_watch_logging.call_args.args == (get_watch_log_path(store),)
 
 
+def test_watch_run_accepts_internal_store_override(tmp_path: Path) -> None:
+    """Managed services can select their exact rule store without a shell wrapper."""
+    store = tmp_path / "managed.yaml"
+    with patch("autometa.cli.WatchService.run", return_value=0):
+        assert main(["watch", "run", "--store", str(store)]) == 0
+
+
 def test_watch_run_accepts_explicit_observer_mode(tmp_path: Path) -> None:
     """Foreground operation can force polling or native watchdog events."""
     with patch("autometa.cli.WatchService.run", return_value=0) as run:
