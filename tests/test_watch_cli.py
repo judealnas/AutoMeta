@@ -2,12 +2,27 @@
 
 import os
 from pathlib import Path
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from autometa.cli import main
 from autometa.watch_store import ENV_STORE_PATH, RuleStore
+
+
+def test_module_execution_invokes_the_cli() -> None:
+    """The module form runs the same command entrypoint as the console script."""
+    result = subprocess.run(
+        [sys.executable, "-m", "autometa.cli", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Modify audio file metadata" in result.stdout
 
 
 def test_watch_add_list_and_remove_return_statuses(tmp_path: Path, capsys) -> None:

@@ -479,3 +479,7 @@ def console_main() -> None:
     :return: None.
     """
     raise SystemExit(main())
+
+
+if __name__ == "__main__":
+    console_main()
