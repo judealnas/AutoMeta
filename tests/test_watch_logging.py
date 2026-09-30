@@ -35,14 +35,19 @@ def test_log_watch_event_writes_a_private_structured_json_line(tmp_path: Path) -
     lines = log_path.read_text(encoding="utf-8").splitlines()
 
     assert len(lines) == 1
-    assert json.loads(lines[0]) == {
+    record = json.loads(lines[0])
+
+    assert record == {
         "schema_version": 1,
         "event": "file_processed",
+        "level": "INFO",
         "message": "file_processed",
         "path": str(watched_path),
         "rule_ids": ["rule-a", "rule-z"],
+        "timestamp": record["timestamp"],
     }
-    assert "pathname" not in json.loads(lines[0])
+    assert record["timestamp"].endswith("Z")
+    assert "pathname" not in record
 
 
 def test_log_watch_event_preserves_required_schema_fields(tmp_path: Path) -> None:
@@ -61,11 +66,15 @@ def test_log_watch_event_preserves_required_schema_fields(tmp_path: Path) -> Non
         path=watched_path,
     )
 
-    assert json.loads(log_path.read_text(encoding="utf-8")) == {
+    record = json.loads(log_path.read_text(encoding="utf-8"))
+
+    assert record == {
         "schema_version": 1,
         "event": "watch.path_queued",
+        "level": "INFO",
         "message": "watch.path_queued",
         "path": str(watched_path),
+        "timestamp": record["timestamp"],
     }
 
 
@@ -116,6 +125,11 @@ def test_setup_watch_logging_does_not_duplicate_file_output(tmp_path: Path) -> N
     log_watch_event(second_logger, "service_started", logging.INFO)
 
     assert first_logger is second_logger
-    assert log_path.read_text(encoding="utf-8").splitlines() == [
-        '{"event":"service_started","message":"service_started","schema_version":1}'
-    ]
+    record = json.loads(log_path.read_text(encoding="utf-8"))
+    assert record == {
+        "event": "service_started",
+        "level": "INFO",
+        "message": "service_started",
+        "schema_version": 1,
+        "timestamp": record["timestamp"],
+    }

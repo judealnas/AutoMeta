@@ -1,5 +1,6 @@
 """Structured, privacy-safe logging for the watch service."""
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -21,7 +22,13 @@ class _JsonWatchFormatter(logging.Formatter):
         :return: A compact JSON object suitable for one JSONL line.
         :rtype: str
         """
-        payload = getattr(record, "watch_payload", {})
+        payload = dict(getattr(record, "watch_payload", {}))
+        payload["timestamp"] = (
+            datetime.fromtimestamp(record.created, tz=timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        payload["level"] = record.levelname
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 

@@ -139,6 +139,38 @@ rule store, so `stop`, `status`, and `uninstall` continue to target the service
 originally installed for that configuration. `autometa watch run` remains
 available for debugging and for users who supply their own supervisor.
 
+### Watch Log Inspection
+
+Each `autometa watch run` writes durable JSONL audit records beside its rule
+store. The default store therefore writes to
+`~/.config/autometa/.watchers.yaml.log` on Linux/macOS and
+`%APPDATA%\\autometa\\.watchers.yaml.log` on Windows. Records include UTC
+timestamps, severity, event type, paths, rule IDs, and changed tag names; they
+do not contain metadata values. The active file rotates at 5 MiB and keeps five
+archives.
+
+```bash
+# Show the log location and the 50 newest records.
+autometa logs path
+autometa logs
+
+# Filter one file's history, failures, or a recent time range.
+autometa logs file /music/album/track.mp3
+autometa logs failures --since 24h
+autometa logs --event watch.metadata_updated --rule <uuid> --json
+
+# Aggregate matching records or follow new records.
+autometa logs summary
+autometa logs --follow --level ERROR
+
+# Destructive: stop the watcher first, then remove the active and rotated logs.
+autometa watch stop
+autometa logs clear --yes
+```
+
+`--path`, `--rule`, `--event`, `--level`, `--since`, and `--tail` can be
+combined. `--json` preserves JSONL output for shell or PowerShell processing.
+
 ```bash
 # Patterns are relative to the concrete root; ** expresses any directory depth.
 autometa watch add /music --include "**/*.mp3" --include "**/*.flac" \
