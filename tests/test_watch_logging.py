@@ -45,6 +45,30 @@ def test_log_watch_event_writes_a_private_structured_json_line(tmp_path: Path) -
     assert "pathname" not in json.loads(lines[0])
 
 
+def test_log_watch_event_preserves_required_schema_fields(tmp_path: Path) -> None:
+    """Caller fields cannot replace the stable watch-event schema fields."""
+    log_path = tmp_path / "reserved-fields.log"
+    logger = setup_watch_logging(log_path)
+    watched_path = tmp_path / "music" / "song.mp3"
+
+    log_watch_event(
+        logger,
+        "watch.path_queued",
+        logging.INFO,
+        schema_version=99,
+        message="bad",
+        event="bad",
+        path=watched_path,
+    )
+
+    assert json.loads(log_path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "event": "watch.path_queued",
+        "message": "watch.path_queued",
+        "path": str(watched_path),
+    }
+
+
 def test_log_watch_event_converts_paths_tuples_and_sets_deterministically(
     tmp_path: Path,
 ) -> None:

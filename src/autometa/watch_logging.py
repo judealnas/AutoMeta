@@ -104,14 +104,14 @@ def setup_watch_logging(log_path: Path, verbosity: int = 1) -> logging.Logger:
 
 
 def log_watch_event(
-    logger: logging.Logger, event: str, level: int, **fields: Any
+    logger: logging.Logger, event_name: str, level: int, **fields: Any
 ) -> None:
     """Emit one structured watch event without exposing arbitrary log metadata.
 
     :param logger: Logger returned by :func:`setup_watch_logging`.
     :type logger: logging.Logger
-    :param event: Stable event identifier recorded in the JSON payload and message.
-    :type event: str
+    :param event_name: Stable event identifier recorded in the JSON payload and message.
+    :type event_name: str
     :param level: Standard-library logging level for the event.
     :type level: int
     :param fields: Explicit event fields to include in the structured payload.
@@ -121,11 +121,17 @@ def log_watch_event(
     """
     payload: dict[str, Any] = {
         "schema_version": 1,
-        "event": event,
-        "message": event,
+        "event": event_name,
+        "message": event_name,
     }
-    payload.update(_serialize_fields(fields))
-    logger.log(level, event, extra={"watch_payload": payload})
+    payload.update(
+        {
+            key: value
+            for key, value in _serialize_fields(fields).items()
+            if key not in {"schema_version", "event", "message"}
+        }
+    )
+    logger.log(level, event_name, extra={"watch_payload": payload})
 
 
 def _serialize_fields(fields: dict[str, Any]) -> dict[str, Any]:
