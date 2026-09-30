@@ -13,6 +13,7 @@ from autometa.core import MusicFile, UnsupportedFileTypeError
 from autometa.logging_util import setup_logging
 from autometa.service_manager import ServiceManagerError, WatchServiceManager
 from autometa.tags import Tags
+from autometa.watch_logging import get_watch_log_path, setup_watch_logging
 from autometa.watch_store import (
     RuleStore,
     WatchRule,
@@ -249,7 +250,10 @@ def _handle_watch(argv: list[str]) -> int:
                 installed = "installed" if status.installed else "not installed"
                 print(f"{status.backend} service {status.name}: {installed}, {state}")
             return 0
-        return WatchService(store, observer_mode=args.observer).run()
+        if args.action == "run":
+            logger = setup_watch_logging(get_watch_log_path(store.path))
+            return WatchService(store, observer_mode=args.observer, logger=logger).run()
+        raise RuntimeError(f"Unhandled watch action: {args.action}")
     except (OSError, ServiceManagerError, TypeError, ValueError) as exc:
         print(f"autometa watch: error: {exc}", file=sys.stderr)
         return 2

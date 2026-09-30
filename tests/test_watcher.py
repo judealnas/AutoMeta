@@ -1,5 +1,7 @@
 """Behavior tests for the foreground reconciliation watcher service."""
 
+import json
+import logging
 from pathlib import Path
 import time
 
@@ -170,8 +172,164 @@ def test_normalizer_uses_move_destination_and_ignores_directories(
     assert normalizer.path_for(DirCreatedEvent(str(tmp_path))) is None
 
 
+def test_service_logs_file_events_and_debounce_decisions(
+    tmp_path: Path, caplog
+) -> None:
+    """Matching file events are recorded while ignored and duplicate events explain why.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    :param caplog: Pytest log-record capture fixture.
+    :type caplog: pytest.LogCaptureFixture
+    """
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    root = tmp_path / "music"
+    root.mkdir()
+    target = root / "track.mp3"
+    store = RuleStore(tmp_path / "watchers.yaml")
+    rule = WatchRule.create(root=root, include=["*.mp3"], metadata={"year": "2024"})
+    store.add(rule)
+    logger = logging.getLogger("autometa.tests.watcher.events")
+    service = WatchService(store, logger=logger)
+    service._rules = store.load()
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    service._enqueue_event(FileCreatedEvent(str(target)))
+    service._enqueue_event(FileModifiedEvent(str(target)))
+    service._enqueue_event(DirCreatedEvent(str(root / "album")))
+    service._enqueue_event(FileCreatedEvent(str(root / "cover.jpg")))
+
+    payloads = [
+        record.watch_payload
+        for record in caplog.records
+        if hasattr(record, "watch_payload")
+    ]
+
+    assert [payload["event"] for payload in payloads] == [
+        "watch.fs_event_received",
+        "watch.path_queued",
+        "watch.fs_event_received",
+        "watch.path_debounced",
+        "watch.fs_event_received",
+        "watch.fs_event_ignored",
+        "watch.fs_event_received",
+        "watch.fs_event_rejected",
+    ]
+    assert payloads[1] == {
+        "schema_version": 1,
+        "event": "watch.path_queued",
+        "message": "watch.path_queued",
+        "path": str(target),
+        "event_type": "created",
+        "rule_ids": [rule.id],
+        "source": "filesystem_event",
+    }
+
+
+def test_service_writes_observer_events_and_metadata_actions_to_jsonl(
+    tmp_path: Path,
+) -> None:
+    """The canonical JSONL log records accepted observer events and tag updates.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    """
+    from autometa.watch_logging import setup_watch_logging
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    class FakeFile:
+        def __init__(self) -> None:
+            self.values = {"year": "2000"}
+
+        def __getitem__(self, key):
+            return self.values.get(key.value)
+
+        def __setitem__(self, key, value) -> None:
+            self.values[key.value] = value
+
+        def save(self) -> None:
+            pass
+
+    class ReadyProbe:
+        def ready(self, path: Path) -> bool:
+            return True
+
+        def forget(self, path: Path) -> None:
+            pass
+
+    root = tmp_path / "music"
+    root.mkdir()
+    target = root / "track.mp3"
+    target.write_bytes(b"x")
+    store = RuleStore(tmp_path / "watchers.yaml")
+    rule = WatchRule.create(root=root, include=["*.mp3"], metadata={"year": "2024"})
+    store.add(rule)
+    log_path = tmp_path / "watch.jsonl"
+    service = WatchService(
+        store,
+        logger=setup_watch_logging(log_path),
+        reconciler=MetadataReconciler(lambda _: FakeFile()),
+    )
+    service._rules = store.load()
+    service.probe = ReadyProbe()
+
+    service._enqueue_event(FileCreatedEvent(str(target)))
+    service._process(target)
+
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+
+    assert [record["event"] for record in records] == [
+        "watch.fs_event_received",
+        "watch.path_queued",
+        "watch.reconciliation_started",
+        "watch.metadata_updated",
+    ]
+    assert records[1]["event_type"] == "created"
+    assert records[1]["source"] == "filesystem_event"
+    assert records[3]["changed_tags"] == ["year"]
+    assert "2024" not in log_path.read_text()
+
+
+def test_service_writes_debug_observer_decisions_to_jsonl(tmp_path: Path) -> None:
+    """The canonical JSONL log retains ignored and rejected observer callbacks.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    """
+    from autometa.watch_logging import setup_watch_logging
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    root = tmp_path / "music"
+    root.mkdir()
+    store = RuleStore(tmp_path / "watchers.yaml")
+    store.add(WatchRule.create(root=root, include=["*.mp3"], metadata={"year": "2024"}))
+    log_path = tmp_path / "watch.jsonl"
+    service = WatchService(store, logger=setup_watch_logging(log_path))
+    service._rules = store.load()
+
+    service._enqueue_event(DirCreatedEvent(str(root / "album")))
+    service._enqueue_event(FileCreatedEvent(str(root / "cover.jpg")))
+
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+
+    assert [record["event"] for record in records] == [
+        "watch.fs_event_received",
+        "watch.fs_event_ignored",
+        "watch.fs_event_received",
+        "watch.fs_event_rejected",
+    ]
+
+
 def test_debounce_queue_coalesces_event_storm(tmp_path: Path) -> None:
-    """Repeated events for one canonical path produce one ready job."""
+    """Repeated events for one canonical path produce one ready job.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    """
     queue = DebounceQueue(delay=0)
     path = tmp_path / "track.mp3"
     for _ in range(30):
@@ -255,14 +413,116 @@ def test_reconciler_is_idempotent_and_isolates_malformed_file(tmp_path: Path) ->
     rule = WatchRule.create(root=tmp_path, metadata={"year": "2024"})
     path = tmp_path / "track.mp3"
 
-    assert reconciler.reconcile(path, rule) is True
-    assert reconciler.reconcile(path, rule) is False
+    changed = reconciler.reconcile(path, rule)
+    unchanged = reconciler.reconcile(path, rule)
+
+    assert changed.changed is True
+    assert changed.changed_tags == ("year",)
+    assert changed.failed is False
+    assert unchanged.changed is False
+    assert unchanged.failed is False
     assert fake.saves == 1
 
     broken = MetadataReconciler(
         lambda _: (_ for _ in ()).throw(ValueError("bad media"))
     )
-    assert broken.reconcile(path, rule) is False
+    assert broken.reconcile(path, rule).failed is True
+
+
+def test_service_logs_reconciliation_actions_without_metadata_values(
+    tmp_path: Path, caplog
+) -> None:
+    """A settled file records whether metadata changed, was current, or failed.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    :param caplog: Pytest log-record capture fixture.
+    :type caplog: pytest.LogCaptureFixture
+    """
+    from autometa.watch_store import RuleStore
+    from autometa.watcher import WatchService
+
+    class FakeFile:
+        def __init__(self, year: str) -> None:
+            self.values = {"year": year}
+            self.saves = 0
+
+        def __getitem__(self, key):
+            return self.values.get(key.value)
+
+        def __setitem__(self, key, value) -> None:
+            self.values[key.value] = value
+
+        def save(self) -> None:
+            self.saves += 1
+
+    class ReadyProbe:
+        def ready(self, path: Path) -> bool:
+            return True
+
+        def forget(self, path: Path) -> None:
+            pass
+
+    root = tmp_path / "music"
+    root.mkdir()
+    target = root / "track.mp3"
+    target.write_bytes(b"x")
+    store = RuleStore(tmp_path / "watchers.yaml")
+    rule = WatchRule.create(root=root, metadata={"year": "2024"})
+    store.add(rule)
+    logger = logging.getLogger("autometa.tests.watcher.actions")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    changed_file = FakeFile("2000")
+    changed = WatchService(
+        store,
+        logger=logger,
+        reconciler=MetadataReconciler(lambda _: changed_file),
+    )
+    changed._rules = store.load()
+    changed.probe = ReadyProbe()
+    changed._process(target)
+
+    current_file = FakeFile("2024")
+    current = WatchService(
+        store,
+        logger=logger,
+        reconciler=MetadataReconciler(lambda _: current_file),
+    )
+    current._rules = store.load()
+    current.probe = ReadyProbe()
+    current._process(target)
+
+    failed = WatchService(
+        store,
+        logger=logger,
+        reconciler=MetadataReconciler(
+            lambda _: (_ for _ in ()).throw(ValueError("bad media"))
+        ),
+    )
+    failed._rules = store.load()
+    failed.probe = ReadyProbe()
+    failed._process(target)
+
+    payloads = [
+        record.watch_payload
+        for record in caplog.records
+        if hasattr(record, "watch_payload")
+    ]
+    events = [payload["event"] for payload in payloads]
+
+    assert events == [
+        "watch.reconciliation_started",
+        "watch.metadata_updated",
+        "watch.reconciliation_started",
+        "watch.metadata_unchanged",
+        "watch.reconciliation_started",
+        "watch.reconciliation_failed",
+    ]
+    assert payloads[1]["changed_tags"] == ["year"]
+    assert "2024" not in str(payloads)
+    assert changed_file.saves == 1
+    assert current_file.saves == 0
 
 
 def test_service_requeues_event_received_during_inflight_work(tmp_path: Path) -> None:

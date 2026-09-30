@@ -18,6 +18,7 @@ from watchdog.observers.polling import PollingObserver
 
 from autometa.core import MusicFile
 from autometa.tags import Tags
+from autometa.watch_logging import log_watch_event
 from autometa.watch_store import RuleStore, WatchRule
 
 LOGGER = logging.getLogger(__name__)
@@ -230,13 +231,17 @@ class DebounceQueue:
         self._items: dict[Path, float] = {}
         self._lock = threading.Lock()
 
-    def put(self, path: Path) -> None:
+    def put(self, path: Path) -> bool:
         """Add or refresh one path's quiet-period deadline.
 
         :param path: Candidate path to coalesce.
+        :return: Whether this call created a new pending queue entry.
         """
+        canonical_path = path.resolve()
         with self._lock:
-            self._items[path.resolve()] = time.monotonic() + self.delay
+            added = canonical_path not in self._items
+            self._items[canonical_path] = time.monotonic() + self.delay
+        return added
 
     def pop_ready(self) -> list[Path]:
         """Remove and return paths whose quiet period elapsed.
@@ -300,6 +305,15 @@ class FileStabilityProbe:
         self._seen.clear()
 
 
+@dataclass(frozen=True)
+class ReconciliationResult:
+    """Describe the outcome of one metadata reconciliation attempt."""
+
+    changed: bool
+    changed_tags: tuple[str, ...] = ()
+    failed: bool = False
+
+
 class MetadataReconciler:
     """Idempotently reconcile metadata without allowing media errors to escape."""
 
@@ -312,16 +326,18 @@ class MetadataReconciler:
         """
         self.music_file_factory = music_file_factory
 
-    def reconcile(self, path: Path, rule: WatchRule | EffectiveRule) -> bool:
-        """Update only mismatched metadata and contain all per-file failures.
+    def reconcile(
+        self, path: Path, rule: WatchRule | EffectiveRule
+    ) -> ReconciliationResult:
+        """Update mismatched metadata and contain all per-file failures.
 
         :param path: File path to reconcile.
         :param rule: Desired metadata rule.
-        :return: Whether metadata was saved.
+        :return: Whether metadata changed, which tags changed, or whether it failed.
         """
         try:
             media = self.music_file_factory(path)
-            changed = False
+            changed_tags: list[str] = []
             for name, desired in rule.metadata.items():
                 tag = Tags(name)
                 desired_value = (
@@ -331,13 +347,15 @@ class MetadataReconciler:
                 )
                 if media[tag] != desired_value:
                     media[tag] = desired_value
-                    changed = True
-            if changed:
+                    changed_tags.append(name)
+            if changed_tags:
                 media.save()
-            return changed
+            return ReconciliationResult(
+                changed=bool(changed_tags), changed_tags=tuple(sorted(changed_tags))
+            )
         except Exception:
             LOGGER.exception("Could not reconcile %s for rule %s", path, rule.id)
-            return False
+            return ReconciliationResult(changed=False, failed=True)
 
 
 class _QueueingHandler(FileSystemEventHandler):
@@ -448,6 +466,7 @@ class WatchService:
         observer_factory: Callable[[], Observer] | None = None,
         observer_mode: str = "auto",
         reconciler: MetadataReconciler | None = None,
+        logger: logging.Logger | None = None,
         workers: int = 2,
         debounce_delay: float = 0.25,
         shutdown_timeout: float = 5.0,
@@ -458,6 +477,7 @@ class WatchService:
         :param observer_factory: Optional injectable watchdog observer constructor.
         :param observer_mode: ``auto``, ``native``, or ``polling`` selection.
         :param reconciler: Injectable metadata reconciliation component.
+        :param logger: Logger receiving structured observer and reconciliation events.
         :param workers: Maximum concurrent file workers.
         :param debounce_delay: Event quiet period.
         :param shutdown_timeout: Maximum work-drain time on shutdown.
@@ -466,6 +486,7 @@ class WatchService:
         self.observer_factory = observer_factory
         self.observer_mode = observer_mode
         self.reconciler = reconciler or MetadataReconciler()
+        self.logger = logger or LOGGER
         self.workers = workers
         self.queue = DebounceQueue(debounce_delay)
         self.probe = FileStabilityProbe()
@@ -484,16 +505,71 @@ class WatchService:
         """
         self.shutdown_event.set()
 
+    def _log_event(self, event_name: str, level: int, **fields: object) -> None:
+        """Emit one privacy-safe structured service event.
+
+        :param event_name: Stable watch event identifier.
+        :param level: Standard-library logging level for the event.
+        :param fields: Explicit event context without metadata values.
+        :return: None.
+        """
+        log_watch_event(self.logger, event_name, level, **fields)
+
+    def _matching_rule_ids(self, path: Path) -> list[str]:
+        """Return configured rule IDs matching a candidate path.
+
+        :param path: Candidate file path.
+        :return: Sorted matching rule IDs.
+        """
+        return sorted(
+            rule.id for rule in self._rules if PathMatcher(rule).matches(path)
+        )
+
     def _enqueue_event(self, event: FileSystemEvent) -> None:
-        """Normalize a callback event and enqueue matching candidates.
+        """Normalize an observer callback and record its queue decision.
 
         :param event: Raw watchdog event.
+        :return: None.
         """
+        event_type = getattr(event, "event_type", "")
+        received_fields: dict[str, object] = {
+            "event_type": event_type,
+            "is_directory": event.is_directory,
+            "src_path": Path(event.src_path),
+        }
+        if event_type == "moved":
+            received_fields["dest_path"] = Path(event.dest_path)
+        self._log_event("watch.fs_event_received", logging.DEBUG, **received_fields)
+
         path = EventNormalizer().path_for(event)
-        if path is not None and any(
-            PathMatcher(rule).matches(path) for rule in self._rules
-        ):
-            self.queue.put(path)
+        if path is None:
+            reason = "directory" if event.is_directory else "unsupported_event_type"
+            self._log_event(
+                "watch.fs_event_ignored",
+                logging.DEBUG,
+                event_type=event_type,
+                reason=reason,
+            )
+            return
+        rule_ids = self._matching_rule_ids(path)
+        if not rule_ids:
+            self._log_event(
+                "watch.fs_event_rejected",
+                logging.DEBUG,
+                event_type=event_type,
+                path=path,
+                reason="no_matching_rule",
+            )
+            return
+        queued = self.queue.put(path)
+        self._log_event(
+            "watch.path_queued" if queued else "watch.path_debounced",
+            logging.INFO if queued else logging.DEBUG,
+            event_type=event_type,
+            path=path,
+            rule_ids=rule_ids,
+            source="filesystem_event",
+        )
 
     def _schedule(self) -> None:
         """Create and start an observer for the current set of rules."""
@@ -529,10 +605,30 @@ class WatchService:
             if not self.probe.ready(path):
                 if not self.shutdown_event.is_set():
                     self.queue.put(path)
+                    self._log_event(
+                        "watch.path_deferred",
+                        logging.DEBUG,
+                        path=path,
+                        reason="not_stable",
+                    )
                 return
             settled = True
             resolution = resolve_effective_rule(path, self._rules)
             if resolution.conflicts:
+                self._log_event(
+                    "watch.reconciliation_skipped",
+                    logging.ERROR,
+                    path=path,
+                    reason="conflicting_rules",
+                    conflicts=[
+                        {
+                            "priority": conflict.priority,
+                            "rule_ids": conflict.rule_ids,
+                            "tag": conflict.tag,
+                        }
+                        for conflict in resolution.conflicts
+                    ],
+                )
                 for conflict in resolution.conflicts:
                     LOGGER.error(
                         "Conflicting watch rules for %s: tag %s has incompatible "
@@ -543,9 +639,54 @@ class WatchService:
                         ", ".join(conflict.rule_ids),
                     )
                 return
-            if resolution.rule is not None:
-                self.reconciler.reconcile(path, resolution.rule)
+            if resolution.rule is None:
+                self._log_event(
+                    "watch.reconciliation_skipped",
+                    logging.INFO,
+                    path=path,
+                    reason="no_effective_rule",
+                )
+                return
+            rule_ids = resolution.rule.id.split(",")
+            self._log_event(
+                "watch.reconciliation_started",
+                logging.INFO,
+                path=path,
+                rule_ids=rule_ids,
+            )
+            outcome = self.reconciler.reconcile(path, resolution.rule)
+            if isinstance(outcome, bool):
+                outcome = ReconciliationResult(changed=outcome)
+            if outcome.failed:
+                self._log_event(
+                    "watch.reconciliation_failed",
+                    logging.ERROR,
+                    path=path,
+                    rule_ids=rule_ids,
+                    stage="metadata_reconciliation",
+                )
+            elif outcome.changed:
+                self._log_event(
+                    "watch.metadata_updated",
+                    logging.INFO,
+                    path=path,
+                    rule_ids=rule_ids,
+                    changed_tags=outcome.changed_tags,
+                )
+            else:
+                self._log_event(
+                    "watch.metadata_unchanged",
+                    logging.INFO,
+                    path=path,
+                    rule_ids=rule_ids,
+                )
         except Exception:
+            self._log_event(
+                "watch.reconciliation_failed",
+                logging.ERROR,
+                path=path,
+                stage="unexpected_worker_failure",
+            )
             LOGGER.exception("Unexpected worker failure for %s", path)
         finally:
             if settled:

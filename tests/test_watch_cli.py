@@ -160,6 +160,25 @@ def test_watch_start_delegates_to_platform_service_manager(
     assert "started systemd service autometa-watch-test" in capsys.readouterr().out
 
 
+def test_watch_run_configures_file_backed_watch_logging(tmp_path: Path) -> None:
+    """Foreground watch runs inject the canonical structured event logger.
+
+    :param tmp_path: Pytest temporary directory.
+    :type tmp_path: pathlib.Path
+    """
+    from autometa.watch_logging import get_watch_log_path
+
+    store = tmp_path / "watchers.yaml"
+    with (
+        patch("autometa.cli.setup_watch_logging") as setup_watch_logging,
+        patch("autometa.cli.WatchService.run", return_value=0),
+        patch.dict(os.environ, {ENV_STORE_PATH: str(store)}),
+    ):
+        assert main(["watch", "run"]) == 0
+
+    assert setup_watch_logging.call_args.args == (get_watch_log_path(store),)
+
+
 def test_watch_run_accepts_explicit_observer_mode(tmp_path: Path) -> None:
     """Foreground operation can force polling or native watchdog events."""
     with patch("autometa.cli.WatchService.run", return_value=0) as run:

@@ -66,7 +66,8 @@ def setup_watch_logging(log_path: Path, verbosity: int = 1) -> logging.Logger:
     :type log_path: pathlib.Path
     :param verbosity: Console verbosity where 0 is WARNING, 1 is INFO, and 2 is DEBUG.
     :type verbosity: int
-    :return: The configured logger for the canonical log path.
+    :return: The configured logger for the canonical log path. JSONL always retains
+        DEBUG and higher records for complete watch-event auditing.
     :rtype: logging.Logger
     """
     canonical_log_path = log_path.resolve()
@@ -88,7 +89,7 @@ def setup_watch_logging(log_path: Path, verbosity: int = 1) -> logging.Logger:
         backupCount=5,
         encoding="utf-8",
     )
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(_JsonWatchFormatter())
     logger.addHandler(file_handler)
 
