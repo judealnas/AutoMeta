@@ -23,6 +23,7 @@ from autometa.log_query import (
 from autometa.service_manager import ServiceManagerError, WatchServiceManager
 from autometa.tags import Tags
 from autometa.watch_logging import get_watch_log_path, setup_watch_logging
+from autometa.watch_rulefile import load_watch_rulefile
 from autometa.watch_store import (
     RuleStore,
     WatchRule,
@@ -69,6 +70,10 @@ WATCH_PARSER = argparse.ArgumentParser(
     prog="autometa watch", description="Manage metadata watch rules."
 )
 WATCH_SUBPARSERS = WATCH_PARSER.add_subparsers(dest="action", required=True)
+WATCH_APPLY = WATCH_SUBPARSERS.add_parser(
+    "apply", help="Apply all watch rules from a user-authored YAML file."
+)
+WATCH_APPLY.add_argument("file", type=Path, help="User-authored watch rule file.")
 WATCH_ADD = WATCH_SUBPARSERS.add_parser("add", help="Add a declarative watch rule.")
 WATCH_ADD.add_argument("root", type=Path, help="Existing root directory to monitor.")
 WATCH_ADD.add_argument(
@@ -246,6 +251,7 @@ def _updated_rule_from_args(args: argparse.Namespace, existing: WatchRule) -> Wa
         exclude=exclude,
         priority=existing.priority if args.priority is None else args.priority,
         metadata=metadata,
+        source=existing.source,
     )
 
 
@@ -374,6 +380,11 @@ def _handle_watch(argv: list[str]) -> int:
     setup_logging(1)
     store = RuleStore(getattr(args, "store", None) or get_watch_store_path())
     try:
+        if args.action == "apply":
+            source, rules = load_watch_rulefile(args.file)
+            store.apply(source, rules)
+            print(f"applied {len(rules)} watch rules from {source}")
+            return 0
         if args.action == "add":
             metadata = normalize_metadata(_collect_metadata(args))
             rule = WatchRule.create(
@@ -388,9 +399,10 @@ def _handle_watch(argv: list[str]) -> int:
             return 0
         if args.action == "list":
             for rule in store.load():
+                source_suffix = f"\tsource={rule.source}" if rule.source else ""
                 print(
                     f"{rule.id}\t{rule.root}\tpriority={rule.priority}\t"
-                    f"{','.join(rule.include)}\t{rule.metadata}"
+                    f"{','.join(rule.include)}\t{rule.metadata}{source_suffix}"
                 )
             return 0
         if args.action == "update":
