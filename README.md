@@ -139,6 +139,90 @@ rule store, so `stop`, `status`, and `uninstall` continue to target the service
 originally installed for that configuration. `autometa watch run` remains
 available for debugging and for users who supply their own supervisor.
 
+#### Apply watcher rules from a file
+
+Use a **separate, user-authored YAML file** for complex watcher rules. It is not
+the one-off `--rulefile` format above, and it is not the internal `watchers.yaml`
+store. For example, with `music-watch.yaml` beside an existing `music/` directory
+containing `live/`:
+
+```yaml
+version: 1
+root: music
+rules:
+  - name: defaults
+    include: ["**/*.mp3", "**/*.flac"]
+    exclude: ["**/*.part"]
+    metadata:
+      artist: ["Alice", "Bob"]
+      genre: Classical
+  - name: live
+    root: music/live
+    include: ["*.mp3"]
+    priority: 100
+    metadata:
+      genre: Live
+```
+
+```bash
+autometa watch apply music-watch.yaml
+autometa watch list
+```
+
+The file is **one YAML mapping** (not `---`-separated documents):
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `version` | Yes | Integer `1`. This is the *user file* version, not the internal store version. |
+| `root` | No | Shared default directory for rules without their own `root`. |
+| `rules` | Yes | List of rule mappings. `[]` is valid. |
+
+Each entry in `rules` accepts:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `name` | Yes | Unique, nonempty string within this file; no leading/trailing whitespace. Keeps the same rule ID across applies. |
+| `root` | If no file-level `root` | Existing directory for this rule. **Replaces** the file-level default, rather than being appended to it. |
+| `include` | No | List of root-relative `/`-separated glob patterns; defaults to `["*"]`. `[]` disables matches. |
+| `exclude` | No | List of root-relative glob patterns to omit; defaults to `[]`. |
+| `priority` | No | Integer precedence for overlapping rules; defaults to `0`. Higher wins for the same tag. |
+| `metadata` | Yes | Nonempty mapping of tag names to desired values. |
+
+**Root paths are independent:** both the file-level and rule-level `root` are
+resolved relative to the *YAML file's directory*, not the current shell directory
+and not to each other. In the example, if the YAML file is at
+`/home/me/music-watch.yaml`, `defaults` uses `/home/me/music`, and `live` uses
+`/home/me/music/live`. Setting the rule's `root: live` would instead use
+`/home/me/live`. Absolute paths and `~` also work. Each effective root must
+already be a directory when applied.
+
+Patterns match file paths **relative to each rule's effective root**: `*.mp3`
+matches there, while `**/*.mp3` also matches in subdirectories. Patterns must
+be nonempty, relative, use `/` instead of `\`, and cannot contain `..` path
+components. Lists of patterns must be YAML lists, not single strings or `null`.
+
+Supported metadata keys are `title`, `album`, `artist`, `author`, `genre`,
+`comment`, `year`, `track`, and `picture`. Values may be nonempty strings,
+integers, or nonempty lists of strings; integers are stored as strings. Quote
+numeric values if you want them kept explicitly as strings. Unknown or duplicate
+fields, unknown tags, malformed values, and missing required fields are rejected
+without modifying the store. Matching rules contribute disjoint tags; for a
+shared tag, higher priority wins, then the deeper root at equal priority. If
+conflicting values tie on both, that audio file is skipped during reconciliation.
+
+After editing, run `watch apply` again. It updates rules with the same names and
+removes rules omitted from **that file only**; CLI-added rules and rules from
+other files remain. `rules: []` removes this file's rules. Invalid or missing
+files leave the store unchanged. A running watcher reloads after a successful
+change; `apply` itself does not start it. `watch list` includes `source=<path>`
+for file-owned rules. Manual `watch update` or `remove` of a file-owned rule is
+temporary: the next apply restores the file's definition. Moving or renaming
+the rule file makes it a new source; remove the old source's rules first.
+
+An apply that changes rules upgrades the internal store to version 4 while
+preserving older rules. Back up that store before downgrading AutoMeta to an
+older version.
+
 ### Watch Log Inspection
 
 Each `autometa watch run` writes durable JSONL audit records beside its rule
@@ -188,8 +272,8 @@ autometa watch add /music/live --include "*.mp3" \
 # Explicit priority overrides root depth when needed.
 autometa watch update <uuid> --priority 100
 
-# Inspect, update, or remove stored rules. The YAML store is managed by the CLI;
-# do not edit it manually.
+# Inspect, update, or remove stored rules. The internal YAML store is managed by
+# the CLI; do not edit it manually. Prefer editing and reapplying file-owned rules.
 autometa watch list
 autometa watch update <uuid> --year 2025
 # Priority is preserved when omitted; use it to make a scoped override win.
@@ -208,8 +292,8 @@ autometa watch remove <uuid>
 autometa watch run --observer auto
 ```
 
-The YAML watch store contains rule IDs, roots, include/exclude patterns,
-recursive flags, priorities, and desired metadata only. When a file matches
+The internal YAML watch store contains rule IDs, source ownership, roots,
+include/exclude patterns, priorities, and desired metadata. When a file matches
 multiple rules, disjoint metadata tags are merged. For each shared tag, the
 highest priority wins; at equal priority, the rule with the deeper root wins.
 Rules assigning different values at equal priority and root depth are reported

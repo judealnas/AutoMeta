@@ -97,6 +97,7 @@ class WatchRule:
     exclude: list[str]
     priority: int
     metadata: dict[str, str | list[str]]
+    source: str | None = None
 
     @classmethod
     def create(
@@ -108,6 +109,7 @@ class WatchRule:
         exclude: list[str] | None = None,
         priority: int = 0,
         id: str | None = None,
+        source: str | None = None,
     ) -> "WatchRule":
         """Create a fully validated rule.
 
@@ -117,6 +119,7 @@ class WatchRule:
         :param exclude: Root-relative forward-slash exclusion patterns.
         :param priority: Precedence for conflicting metadata tags.
         :param id: UUID string, generated when omitted.
+        :param source: Canonical path of the user-authored owner, if any.
         :return: Validated watch rule.
         :raises ValueError: If a field is invalid.
         """
@@ -127,6 +130,10 @@ class WatchRule:
             raise ValueError("Watch rule metadata must not be empty.")
         if not isinstance(priority, int) or isinstance(priority, bool):
             raise ValueError("Watch rule priority must be an integer.")
+        if source is not None and (
+            not isinstance(source, str) or not source or not Path(source).is_absolute()
+        ):
+            raise ValueError("Watch rule source must be an absolute path string.")
         cleaned: dict[str, str | list[str]] = {}
         for key, value in metadata.items():
             try:
@@ -148,6 +155,7 @@ class WatchRule:
             _normalize_path_patterns(exclude, default=[]),
             priority,
             cleaned,
+            source,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -155,7 +163,7 @@ class WatchRule:
 
         :return: Serializable mapping.
         """
-        return {
+        result = {
             "id": self.id,
             "root": self.root,
             "include": self.include,
@@ -163,6 +171,9 @@ class WatchRule:
             "priority": self.priority,
             "metadata": self.metadata,
         }
+        if self.source is not None:
+            result["source"] = self.source
+        return result
 
     @classmethod
     def from_dict(cls, value: dict[str, object]) -> "WatchRule":
@@ -182,13 +193,14 @@ class WatchRule:
             exclude=[str(item) for item in value.get("exclude", [])],
             priority=value.get("priority", 0),
             metadata={str(key): item for key, item in metadata.items()},
+            source=value.get("source"),
         )
 
 
 class RuleStore:
     """Atomically manage the versioned YAML document shared by CLI and service."""
 
-    version = 3
+    version = 4
     legacy_version = 2
 
     def __init__(self, path: Path | None = None) -> None:
@@ -295,7 +307,7 @@ class RuleStore:
         if not isinstance(payload, dict):
             raise TypeError("Watch store must be a mapping.")
         version = payload.get("version", self.version)
-        if version not in {self.legacy_version, self.version}:
+        if version not in {self.legacy_version, 3, self.version}:
             raise ValueError("Unsupported watch store version.")
         entries = payload.get("rules", [])
         if not isinstance(entries, list):
@@ -390,6 +402,28 @@ class RuleStore:
             if any(item.id == rule.id for item in rules):
                 raise ValueError(f"Duplicate watch rule ID: {rule.id}")
             self._save_unlocked([*rules, rule])
+
+    def apply(self, source: str, rules: list[WatchRule]) -> None:
+        """Atomically replace the complete set of rules owned by one source.
+
+        :param source: Canonical path identifying the user-authored file.
+        :param rules: Fully validated rules parsed from that file.
+        :raises ValueError: If an ID collides with another owner's rule.
+        """
+        if any(rule.source != source for rule in rules):
+            raise ValueError("Applied rules must belong to their source file.")
+        if len({rule.id for rule in rules}) != len(rules):
+            raise ValueError("Duplicate applied watch rule IDs.")
+        with self._locked():
+            current = self._load_unlocked()
+            other = [rule for rule in current if rule.source != source]
+            collisions = {rule.id for rule in other} & {rule.id for rule in rules}
+            if collisions:
+                raise ValueError("Applied watch rule ID conflicts with another owner.")
+            if [rule for rule in current if rule.source == source] == rules:
+                return
+            replacement = [*other, *rules]
+            self._save_unlocked(replacement)
 
     def update(self, rule_id: str, transform: Callable[[WatchRule], WatchRule]) -> bool:
         """Atomically replace one existing rule using its current stored value.

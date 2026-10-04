@@ -38,7 +38,7 @@ def test_watch_rule_validates_directory_and_known_nonempty_metadata(
 def test_rule_store_migrates_recursive_v2_patterns_to_path_globs(
     tmp_path: Path,
 ) -> None:
-    """Version-two basename rules load as equivalent version-three glob rules."""
+    """Version-two basename rules load as equivalent current-version glob rules."""
     from autometa.watch_store import RuleStore
 
     root = tmp_path / "music"
@@ -61,6 +61,58 @@ def test_rule_store_migrates_recursive_v2_patterns_to_path_globs(
     assert rules[0].include == ["**/*.mp3"]
     assert rules[0].exclude == ["**/*.part"]
     assert not hasattr(rules[0], "recursive")
+
+
+def test_rule_store_reads_version_three_and_upgrades_on_write(tmp_path: Path) -> None:
+    """Older watch state remains readable before the next atomic write.
+
+    :param tmp_path: Directory for a legacy rule root and store.
+    :type tmp_path: Path
+    :return: None.
+    :rtype: None
+    """
+    from autometa.watch_store import RuleStore
+
+    root = tmp_path / "music"
+    root.mkdir()
+    path = tmp_path / "watchers.yaml"
+    path.write_text(
+        "version: 3\nrules:\n"
+        "  - id: 12345678-1234-4567-8123-123456789abc\n"
+        f"    root: {root}\n"
+        "    include: ['*.mp3']\n"
+        "    metadata: {year: '2024'}\n"
+    )
+    store = RuleStore(path)
+    legacy = store.load()[0]
+    assert legacy.source is None
+    store.add(WatchRule.create(root=root, metadata={"genre": "Jazz"}))
+    assert "version: 4" in path.read_text()
+    assert store.load()[0] == legacy
+
+
+def test_store_rejects_invalid_source_provenance(tmp_path: Path) -> None:
+    """Corrupted ownership metadata cannot silently become a different owner.
+
+    :param tmp_path: Directory containing a rule root and malformed store.
+    :type tmp_path: Path
+    :return: None.
+    :rtype: None
+    """
+    from autometa.watch_store import RuleStore
+
+    root = tmp_path / "music"
+    root.mkdir()
+    path = tmp_path / "watchers.yaml"
+    path.write_text(
+        "version: 4\nrules:\n"
+        "  - id: 12345678-1234-4567-8123-123456789abc\n"
+        f"    root: {root}\n"
+        "    metadata: {year: '2024'}\n"
+        "    source: false\n"
+    )
+    with pytest.raises(ValueError, match="source"):
+        RuleStore(path).load()
 
 
 def test_windows_store_lock_releases_the_same_byte_range(
@@ -113,7 +165,7 @@ def test_rule_store_add_remove_reload_and_atomic_yaml(
     store.add(rule)
     assert fsynced_directories == [store_path.parent]
     assert store.load() == [rule]
-    assert "version: 3" in store_path.read_text()
+    assert "version: 4" in store_path.read_text()
     assert store.changed() is False
 
     replacement = WatchRule.create(root=root, metadata={"title": "New"})
